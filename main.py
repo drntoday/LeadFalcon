@@ -181,6 +181,65 @@ class MainWindow(QMainWindow):
         self.agent_thread.finished.connect(self.agent_thread.deleteLater)
         self.agent.status_updated.connect(lambda msg: self.statusBar().showMessage(msg))
         self.agent.lead_found.connect(self.on_lead_found)
+        
+        # Load existing leads from database on startup
+        self.load_leads()
+    
+    def load_leads(self):
+        """Load existing leads from the database and display them in the table."""
+        conn = sqlite3.connect(database.DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT record_type, business_name, person_full_name, role, email, phone, lead_score FROM leads ORDER BY lead_score DESC")
+        rows = cursor.fetchall()
+        conn.close()
+        for row in rows:
+            self.add_lead_to_table(row)
+    
+    def add_lead_to_table(self, row):
+        """Add a lead row to the table.
+        
+        Args:
+            row: tuple (record_type, business_name, person_full_name, role, email, phone, lead_score)
+        """
+        record_type, business_name, person_full_name, role, email, phone, lead_score = row
+        
+        row_idx = self.leads_table.rowCount()
+        self.leads_table.insertRow(row_idx)
+        
+        # Column 0: Type
+        self.leads_table.setItem(row_idx, 0, QTableWidgetItem(record_type if record_type else ""))
+        
+        # Column 1: Business / Person
+        display_name = business_name if record_type == 'ORGANIZATION' else person_full_name
+        self.leads_table.setItem(row_idx, 1, QTableWidgetItem(display_name if display_name else ""))
+        
+        # Column 2: Role
+        self.leads_table.setItem(row_idx, 2, QTableWidgetItem(role if role else ""))
+        
+        # Column 3: Email
+        self.leads_table.setItem(row_idx, 3, QTableWidgetItem(email if email else ""))
+        
+        # Column 4: Phone
+        self.leads_table.setItem(row_idx, 4, QTableWidgetItem(phone if phone else ""))
+        
+        # Column 5: Score
+        self.leads_table.setItem(row_idx, 5, QTableWidgetItem(str(lead_score) if lead_score else "0"))
+    
+    def _lead_dict_to_tuple(self, lead_dict):
+        """Convert a lead dictionary to a tuple matching the database row format."""
+        return (
+            lead_dict.get('record_type', ''),
+            lead_dict.get('business_name', ''),
+            lead_dict.get('person_full_name', ''),
+            lead_dict.get('role', ''),
+            lead_dict.get('email', ''),
+            lead_dict.get('phone', ''),
+            lead_dict.get('lead_score', 0)
+        )
+    
+    def on_lead_found(self, lead_dict):
+        row = self._lead_dict_to_tuple(lead_dict)
+        self.add_lead_to_table(row)
     
     def closeEvent(self, event):
         if hasattr(self, 'agent') and hasattr(self, 'agent_thread'):
@@ -202,29 +261,6 @@ class MainWindow(QMainWindow):
         self.agent.stop()
         self.agent_thread.quit()
         self.agent_thread.wait()
-    
-    def on_lead_found(self, lead_dict):
-        row = self.leads_table.rowCount()
-        self.leads_table.insertRow(row)
-        
-        record_type = lead_dict.get('record_type', '')
-        business_name = lead_dict.get('business_name', '')
-        person_full_name = lead_dict.get('person_full_name', '')
-        role = lead_dict.get('role', '')
-        email = lead_dict.get('email', '')
-        phone = lead_dict.get('phone', '')
-        lead_score = lead_dict.get('lead_score', '')
-        
-        business_or_person = business_name if business_name else person_full_name
-        
-        self.leads_table.setItem(row, 0, QTableWidgetItem(str(record_type)))
-        self.leads_table.setItem(row, 1, QTableWidgetItem(str(business_or_person)))
-        self.leads_table.setItem(row, 2, QTableWidgetItem(str(role)))
-        self.leads_table.setItem(row, 3, QTableWidgetItem(str(email)))
-        self.leads_table.setItem(row, 4, QTableWidgetItem(str(phone)))
-        self.leads_table.setItem(row, 5, QTableWidgetItem(str(lead_score)))
-        
-        self.leads_table.scrollToBottom()
     
     def on_agent_finished(self):
         self.statusBar().showMessage("Finished")
