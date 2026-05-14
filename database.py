@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import csv
+import traceback
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "leadfalcon.db")
 
@@ -55,6 +56,7 @@ def import_comuni_from_csv(csv_path):
         
     except Exception as e:
         print(f"Error importing comuni: {e}")
+        traceback.print_exc()
         return -1
 
 

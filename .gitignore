@@ -1,4 +1,1 @@
-```
-__pycache__/
-*.pyc
-```
+Nothing needs to be added to .gitignore since only a Python source file (`database.py`) was modified and there are no build artifacts, dependencies, or temporary files in the changes.
