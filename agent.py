@@ -317,6 +317,50 @@ class LeadAgent(QObject):
             return {"emails": [], "phones": []}
         return self.extract_contacts_from_text(html)
 
+    def search_google_places(self, city, query="pelletteria"):
+        places_key = self.settings.get("places_key")
+        if not places_key:
+            self.status_updated.emit("Google Places API key not set.")
+            return []
+        
+        headers = {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": places_key,
+            "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.internationalPhoneNumber,places.websiteUri,places.id"
+        }
+        json_body = {"textQuery": f"{query} in {city}, Italy"}
+        
+        try:
+            response = requests.post(
+                "https://places.googleapis.com/v1/places:searchText",
+                headers=headers,
+                json=json_body,
+                impersonate="chrome",
+                timeout=15
+            )
+            
+            if response.status_code != 200:
+                self.status_updated.emit(f"Google Places API error: status {response.status_code}")
+                return []
+            
+            data = response.json()
+            results = []
+            for place in data.get("places", []):
+                display_name = place.get("displayName", {})
+                results.append({
+                    "name": display_name.get("text", ""),
+                    "address": place.get("formattedAddress", ""),
+                    "phone": place.get("internationalPhoneNumber", ""),
+                    "website": place.get("websiteUri", ""),
+                    "place_id": place.get("id", "")
+                })
+            
+            self.status_updated.emit(f"Google Places: found {len(results)} results for {city}")
+            return results
+        except Exception as e:
+            self.status_updated.emit(f"Google Places error: {e}")
+            return []
+
     def _save_person_lead(self, org_lead_id, email, domain):
         conn = sqlite3.connect(database.DB_PATH)
         cursor = conn.cursor()
