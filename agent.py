@@ -16,7 +16,7 @@ PLANNER_PROMPT = """
 You are an expert lead-generation planner for Italian leather goods businesses. For the given city, generate a list of 20–30 search queries that will find retailers, boutiques, wholesalers, and artisans of leather bags, wallets, belts, and accessories. 
 - Use Italian keywords extensively: pelletteria, borse in pelle, accessori moda, articoli da regalo, negozio di pelletteria, rivenditore, artigiano, produzione pelle, etc.
 - Include queries that combine these with the city name and phrases like "telefono", "email", "contatti", "partita iva", "indirizzo".
-- PRIORITISE Italian business directories ABOVE ALL OTHERS: site:paginegialle.it, site:kompass.it, site:infobel.com, site:yelp.it, site:infobel.it, site:italia-industria.it, site:paginebianche.it, site:telefonino.net.
+- PRIORITISE Italian business directories ABOVE ALL OTHERS: site:paginegialle.it, site:kompass.it, site:infobel.com, site:yelp.it, site:infobel.it, site:italia-industria.it, site:paginebianche.it, site:telefonino.net. These must comprise at least 50% of all queries.
 - Generate at least 5 queries that target individual owner/manager names, e.g., "titolare pelletteria Roma", "proprietario negozio borse Milano", "CEO pelletteria Firenze", "direttore negozio pelle Napoli", "fondatore pelletteria artigianale Torino".
 - Avoid generic informational pages; focus ONLY on pages that could contain email/phone numbers (contact pages, directory listings, business profiles, "contatti" pages).
 - Return ONLY a JSON array of strings, no other text. Example: ["pelletteria Roma telefono", "borse in pelle Milano contatti", "site:paginegialle.it pelletteria Torino", "titolare pelletteria Bologna", ...]
