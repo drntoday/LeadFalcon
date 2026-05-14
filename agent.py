@@ -2,6 +2,7 @@ import time
 import sqlite3
 import hashlib
 import groq
+import json
 from PySide6.QtCore import QObject, Signal, Slot, QThread
 from duckduckgo_search import DDGS
 from curl_cffi import requests
@@ -18,6 +19,8 @@ class LeadAgent(QObject):
     lead_found = Signal(dict)
     progress_updated = Signal(str, int, int)
     finished = Signal()
+
+    TOOLS = []
 
     def __init__(self, parent=None, settings=None):
         super().__init__(parent)
@@ -234,6 +237,24 @@ class LeadAgent(QObject):
             self.groq_client = None
             return
         self.groq_client = groq.Client(api_key=key)
+
+    def _groq_chat(self, messages):
+        self._ensure_groq_client()
+        if self.groq_client is None:
+            return None
+        try:
+            response = self.groq_client.chat.completions.create(
+                model="llama-3.1-70b-versatile",
+                messages=messages,
+                tools=(self.TOOLS if len(self.TOOLS) > 0 else None),
+                tool_choice="auto",
+                max_tokens=1000,
+                temperature=0.7
+            )
+            return response
+        except Exception as e:
+            self.status_updated.emit(f"Groq API error: {str(e)}")
+            return None
 
     def generate_keywords_for_city(self, city_name):
         self._ensure_groq_client()
