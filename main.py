@@ -2,8 +2,9 @@ import sys
 import sqlite3
 import json
 import os
+from datetime import datetime
 from openpyxl import Workbook
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QTableWidget, QDialog, QFormLayout, QDialogButtonBox, QTableWidgetItem, QFileDialog, QPushButton, QLineEdit, QComboBox, QCheckBox
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QTableWidget, QDialog, QFormLayout, QDialogButtonBox, QTableWidgetItem, QFileDialog, QLineEdit, QLabel, QCheckBox
 from PySide6.QtGui import QAction
 from PySide6.QtCore import QThread, QTimer, QObject, Signal
 
@@ -57,16 +58,6 @@ class SettingsDialog(QDialog):
             self.groq_key_edit.setText(current_settings["groq_key"])
         form_layout.addRow("Groq API Key", self.groq_key_edit)
         
-        # Scraping Speed
-        self.speed_combo = QComboBox()
-        self.speed_combo.addItems(["Polite", "Aggressive"])
-        self.speed_combo.setObjectName("speed")
-        if current_settings and "speed" in current_settings:
-            idx = self.speed_combo.findText(current_settings["speed"])
-            if idx >= 0:
-                self.speed_combo.setCurrentIndex(idx)
-        form_layout.addRow("Scraping Speed", self.speed_combo)
-        
         # Auto-start checkbox
         self.auto_start_check = QCheckBox("Auto-start scraping on launch")
         self.auto_start_check.setObjectName("auto_start")
@@ -86,7 +77,6 @@ class SettingsDialog(QDialog):
     def on_accepted(self):
         self.settings = {
             "groq_key": self.groq_key_edit.text(),
-            "speed": self.speed_combo.currentText(),
             "auto_start": self.auto_start_check.isChecked()
         }
         self.accept()
@@ -141,6 +131,10 @@ class MainWindow(QMainWindow):
         self.leads_table.setRowCount(0)
         layout.addWidget(self.leads_table)
         
+        # Add a label below the toolbar to show total leads count
+        self.total_leads_label = QLabel("Total leads: 0")
+        layout.addWidget(self.total_leads_label)
+        
         # Add a status bar with "Ready" message
         self.statusBar().showMessage("Ready")
         
@@ -174,6 +168,10 @@ class MainWindow(QMainWindow):
             
             # Start the thread
             self.load_thread.start()
+        else:
+            # Municipalities already loaded, check auto_start
+            if self.app_settings.get("auto_start", False):
+                QTimer.singleShot(0, self.on_start)
         
         # Create agent thread and agent
         self.agent_thread = QThread()
@@ -191,10 +189,6 @@ class MainWindow(QMainWindow):
         
         # Load existing leads from database on startup
         self.load_leads()
-        
-        # Auto-start scraping if enabled in settings
-        if self.app_settings.get("auto_start", False):
-            QTimer.singleShot(0, self.on_start)
     
     def load_leads(self):
         """Load existing leads from the database and display them in the table."""
@@ -254,6 +248,7 @@ class MainWindow(QMainWindow):
     
     def on_progress_updated(self, city, leads_city, total_leads):
         self.statusBar().showMessage(f"{city}: {leads_city} leads found, {total_leads} total")
+        self.total_leads_label.setText(f"Total leads: {total_leads}")
     
     def on_load_progress(self, current, total, message):
         """Slot for municipality loading progress updates."""
@@ -301,7 +296,16 @@ class MainWindow(QMainWindow):
             self.agent.settings = self.app_settings
     
     def on_export(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Export Leads", "", "Excel Files (*.xlsx)")
+        # Check if there are any leads to export
+        if self.leads_table.rowCount() == 0:
+            self.statusBar().showMessage("No leads to export.")
+            return
+        
+        # Generate default filename with date
+        date_str = datetime.now().strftime("%Y%m%d")
+        default_filename = f"LeadFalcon_export_{date_str}.xlsx"
+        
+        path, _ = QFileDialog.getSaveFileName(self, "Export Leads", default_filename, "Excel Files (*.xlsx)")
         if not path:
             return
         try:

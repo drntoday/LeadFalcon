@@ -16,8 +16,10 @@ PLANNER_PROMPT = """
 You are an expert lead-generation planner for Italian leather goods businesses. For the given city, generate a list of 20–30 search queries that will find retailers, boutiques, wholesalers, and artisans of leather bags, wallets, belts, and accessories. 
 - Use Italian keywords extensively: pelletteria, borse in pelle, accessori moda, articoli da regalo, negozio di pelletteria, rivenditore, artigiano, produzione pelle, etc.
 - Include queries that combine these with the city name and phrases like "telefono", "email", "contatti", "partita iva", "indirizzo".
-- Also include 2–3 specific site searches on Italian directories like site:paginegialle.it, site:kompass.it, site:infobel.com.
-- Return ONLY a JSON array of strings, no other text. Example: ["pelletteria Roma telefono", "borse in pelle Milano contatti", ...]
+- PRIORITISE Italian business directories: site:paginegialle.it, site:kompass.it, site:infobel.com, site:yelp.it.
+- Generate at least 5 queries that target individual owner/manager names, e.g., "titolare pelletteria Roma", "proprietario negozio borse Milano", "CEO pelletteria Firenze", "direttore negozio pelle Napoli".
+- Avoid generic informational pages; focus ONLY on pages that could contain email/phone numbers (contact pages, directory listings, business profiles).
+- Return ONLY a JSON array of strings, no other text. Example: ["pelletteria Roma telefono", "borse in pelle Milano contatti", "site:paginegialle.it pelletteria Torino", "titolare pelletteria Bologna", ...]
 """
 
 
@@ -115,17 +117,20 @@ class LeadAgent(QObject):
 
     def _generate_and_store_plan(self, city_id, city_name):
         """Generate a list of 20-30 search queries for the given city and store in DB."""
+        return self._generate_and_store_plan_with_message(city_id, city_name, f"City: {city_name}, Italy.")
+    
+    def _generate_and_store_plan_with_message(self, city_id, city_name, user_message):
+        """Generate a list of search queries for the given city with a custom user message and store in DB."""
         self._ensure_groq_client()
         if self.groq_client is None:
             return []
         
-        user_msg = f"City: {city_name}, Italy."
         try:
             response = self.groq_client.chat.completions.create(
                 model="llama-3.1-70b-versatile",
                 messages=[
                     {"role": "system", "content": PLANNER_PROMPT},
-                    {"role": "user", "content": user_msg}
+                    {"role": "user", "content": user_message}
                 ],
                 max_tokens=1000,
                 temperature=0.8
@@ -139,7 +144,7 @@ class LeadAgent(QObject):
             self.status_updated.emit(f"Error generating plan: {e}")
             return []
         
-        # Store plan in database
+        # Store plan in database (replace existing plan)
         conn = sqlite3.connect(database.DB_PATH)
         cursor = conn.cursor()
         cursor.execute("UPDATE cities SET plan = ? WHERE id = ?", (json.dumps(queries), city_id))
@@ -217,6 +222,52 @@ class LeadAgent(QObject):
                     time.sleep(random.uniform(1, 3))
                 
                 time.sleep(2)  # Between queries
+            
+            # Check if less than 3 leads found for this city
+            conn_check = sqlite3.connect(database.DB_PATH)
+            cursor_check = conn_check.cursor()
+            cursor_check.execute("SELECT COUNT(*) FROM leads WHERE city = ?", (city_name,))
+            row_check = cursor_check.fetchone()
+            leads_count_for_city = row_check[0] if row_check else 0
+            conn_check.close()
+            
+            # Fallback strategy: if less than 3 leads, generate new queries
+            if leads_count_for_city < 3:
+                self.status_updated.emit(f"Only {leads_count_for_city} leads found for {city_name}. Generating new queries with different angles...")
+                fallback_msg = "The previous plan yielded very few leads. Please generate 10 new queries, focusing on different angles such as artisanal shops, wholesalers, and regional directories."
+                new_queries = self._generate_and_store_plan_with_message(city_id, city_name, fallback_msg)
+                
+                # Re-run search loop for additional queries if new queries were generated
+                if new_queries:
+                    for query in new_queries:
+                        if self._stopped:
+                            break
+                        self.wait_if_paused()
+                        self.status_updated.emit(f"Searching (fallback): {query}")
+                        results = self.search_web(query)
+                        
+                        for result in results[:5]:
+                            if self._stopped:
+                                break
+                            self.wait_if_paused()
+                            contacts = self.extract_contacts_from_page(result['url'])
+                            if contacts.get('emails') or contacts.get('phones'):
+                                business_name = result.get('title', '')
+                                website = result.get('url', '')
+                                lead_id = self._save_organization_lead(
+                                    city=city_name,
+                                    business_name=business_name,
+                                    website=website,
+                                    emails=contacts.get('emails', []),
+                                    phones=contacts.get('phones', [])
+                                )
+                                if lead_id and website:
+                                    domain = self._extract_domain(website)
+                                    if domain:
+                                        self._discover_employees(domain, lead_id)
+                            time.sleep(random.uniform(1, 3))
+                        
+                        time.sleep(2)
             
             # Mark city done
             self._mark_city_done(city_id)
