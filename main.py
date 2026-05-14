@@ -6,6 +6,74 @@ from PySide6.QtGui import QAction
 import database
 
 
+class SettingsDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Settings")
+        
+        # Main layout
+        main_layout = QVBoxLayout()
+        self.setLayout(main_layout)
+        
+        # Form layout
+        form_layout = QFormLayout()
+        
+        # Groq API Key
+        self.groq_key_edit = QLineEdit()
+        self.groq_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.groq_key_edit.setObjectName("groq_key")
+        form_layout.addRow("Groq API Key", self.groq_key_edit)
+        
+        # Google Places API Key
+        self.places_key_edit = QLineEdit()
+        self.places_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.places_key_edit.setObjectName("places_key")
+        form_layout.addRow("Google Places API Key", self.places_key_edit)
+        
+        # Scraping Speed
+        self.speed_combo = QComboBox()
+        self.speed_combo.addItems(["Polite", "Aggressive"])
+        self.speed_combo.setObjectName("speed_combo")
+        form_layout.addRow("Scraping Speed", self.speed_combo)
+        
+        # Cities
+        self.cities_edit = QTextEdit()
+        self.cities_edit.setObjectName("cities_edit")
+        self.cities_edit.setFixedHeight(150)
+        cities_text = """Roma
+Milano
+Napoli
+Torino
+Palermo
+Genova
+Bologna
+Firenze
+Catania
+Bari
+Venezia
+Verona"""
+        self.cities_edit.setPlainText(cities_text)
+        form_layout.addRow("Cities", self.cities_edit)
+        
+        # Add form layout to main layout
+        main_layout.addLayout(form_layout)
+        
+        # Button box
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        button_box.accepted.connect(self.on_accepted)
+        button_box.rejected.connect(self.reject)
+        main_layout.addWidget(button_box)
+    
+    def on_accepted(self):
+        self.settings = {
+            "groq_key": self.groq_key_edit.text(),
+            "places_key": self.places_key_edit.text(),
+            "speed": self.speed_combo.currentText(),
+            "cities": [line for line in self.cities_edit.toPlainText().split("\n") if line.strip()]
+        }
+        self.accept()
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -94,78 +162,16 @@ class MainWindow(QMainWindow):
         print("Stop")
     
     def on_settings(self):
-        print("Settings")
+        self.settings_dialog = SettingsDialog(self)
+        if self.settings_dialog.exec() == QDialog.Accepted:
+            self.app_settings = self.settings_dialog.settings
+            self.city_combo.clear()
+            self.city_combo.addItems(self.app_settings['cities'])
+            if self.app_settings['cities']:
+                self.city_combo.setCurrentIndex(0)
     
     def on_export(self):
         print("Export")
-
-
-class SettingsDialog(QDialog):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Settings")
-        
-        # Main layout
-        main_layout = QVBoxLayout()
-        self.setLayout(main_layout)
-        
-        # Form layout
-        form_layout = QFormLayout()
-        
-        # Groq API Key
-        self.groq_key_edit = QLineEdit()
-        self.groq_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.groq_key_edit.setObjectName("groq_key")
-        form_layout.addRow("Groq API Key", self.groq_key_edit)
-        
-        # Google Places API Key
-        self.places_key_edit = QLineEdit()
-        self.places_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.places_key_edit.setObjectName("places_key")
-        form_layout.addRow("Google Places API Key", self.places_key_edit)
-        
-        # Scraping Speed
-        self.speed_combo = QComboBox()
-        self.speed_combo.addItems(["Polite", "Aggressive"])
-        self.speed_combo.setObjectName("speed_combo")
-        form_layout.addRow("Scraping Speed", self.speed_combo)
-        
-        # Cities
-        self.cities_edit = QTextEdit()
-        self.cities_edit.setObjectName("cities_edit")
-        self.cities_edit.setFixedHeight(150)
-        cities_text = """Roma
-Milano
-Napoli
-Torino
-Palermo
-Genova
-Bologna
-Firenze
-Catania
-Bari
-Venezia
-Verona"""
-        self.cities_edit.setPlainText(cities_text)
-        form_layout.addRow("Cities", self.cities_edit)
-        
-        # Add form layout to main layout
-        main_layout.addLayout(form_layout)
-        
-        # Button box
-        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        button_box.accepted.connect(self.on_accepted)
-        button_box.rejected.connect(self.reject)
-        main_layout.addWidget(button_box)
-    
-    def on_accepted(self):
-        self.settings = {
-            "groq_key": self.groq_key_edit.text(),
-            "places_key": self.places_key_edit.text(),
-            "speed": self.speed_combo.currentText(),
-            "cities": [line for line in self.cities_edit.toPlainText().split("\n") if line.strip()]
-        }
-        self.accept()
 
 
 if __name__ == "__main__":
