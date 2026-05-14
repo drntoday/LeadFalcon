@@ -2,7 +2,7 @@ import sys
 import sqlite3
 import json
 from openpyxl import Workbook
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSpinBox, QLineEdit, QTableWidget, QDialog, QFormLayout, QTextEdit, QDialogButtonBox, QTableWidgetItem, QFileDialog
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSpinBox, QLineEdit, QTableWidget, QDialog, QFormLayout, QTextEdit, QDialogButtonBox, QTableWidgetItem, QFileDialog, QMessageBox, QCheckBox, QPushButton
 from PySide6.QtGui import QAction
 from PySide6.QtCore import QThread
 
@@ -64,18 +64,40 @@ Verona"""
         # Add form layout to main layout
         main_layout.addLayout(form_layout)
         
+        # Use all Italian municipalities checkbox
+        self.comuni_checkbox = QCheckBox("Use all Italian municipalities")
+        self.comuni_checkbox.setObjectName("comuni_checkbox")
+        main_layout.addWidget(self.comuni_checkbox)
+        
+        # Load Municipalities button
+        load_muni_button = QPushButton("Load Municipalities")
+        load_muni_button.setObjectName("load_muni_button")
+        load_muni_button.clicked.connect(self.on_load_municipalities)
+        main_layout.addWidget(load_muni_button)
+        
         # Button box
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         button_box.accepted.connect(self.on_accepted)
         button_box.rejected.connect(self.reject)
         main_layout.addWidget(button_box)
     
+    def on_load_municipalities(self):
+        csv_path = database.DB_PATH.replace("leadfalcon.db", "comuni.csv")
+        if not os.path.exists(csv_path):
+            csv_path = os.path.join(os.path.dirname(__file__), "comuni.csv")
+        result = database.import_comuni_from_csv(csv_path)
+        if result >= 0:
+            QMessageBox.information(self, "Municipalities Loaded", f"Inserted {result} new municipalities.")
+        else:
+            QMessageBox.critical(self, "Error", "Failed to load municipalities.")
+    
     def on_accepted(self):
         self.settings = {
             "groq_key": self.groq_key_edit.text(),
             "places_key": self.places_key_edit.text(),
             "speed": self.speed_combo.currentText(),
-            "cities": [line for line in self.cities_edit.toPlainText().split("\n") if line.strip()]
+            "cities": [line for line in self.cities_edit.toPlainText().split("\n") if line.strip()],
+            "use_all_comuni": self.comuni_checkbox.isChecked()
         }
         self.accept()
 
@@ -132,9 +154,21 @@ class MainWindow(QMainWindow):
         self.city_combo.setObjectName("city_combo")
         filter_layout.addWidget(self.city_combo)
         
-        # Populate city_combo from loaded settings if present
-        if 'cities' in self.app_settings:
-            self.city_combo.addItems(self.app_settings['cities'])
+        # Populate city_combo based on use_all_comuni setting
+        use_all_comuni = self.app_settings.get('use_all_comuni', False)
+        if use_all_comuni:
+            # Load cities from database
+            conn = sqlite3.connect(database.DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM cities WHERE status != 'done' ORDER BY id")
+            rows = cursor.fetchall()
+            conn.close()
+            cities = [row[0] for row in rows]
+            self.city_combo.addItems(cities)
+        else:
+            # Use user-defined list from settings
+            if 'cities' in self.app_settings:
+                self.city_combo.addItems(self.app_settings['cities'])
         
         # Min Score label and spin box
         score_label = QLabel("Min Score:")
@@ -268,11 +302,25 @@ class MainWindow(QMainWindow):
     
     def on_settings(self):
         self.settings_dialog = SettingsDialog(self)
+        # Pre-populate checkbox state from settings
+        if 'use_all_comuni' in self.app_settings:
+            self.settings_dialog.comuni_checkbox.setChecked(self.app_settings['use_all_comuni'])
         if self.settings_dialog.exec() == QDialog.Accepted:
             self.app_settings = self.settings_dialog.settings
             self.city_combo.clear()
-            self.city_combo.addItems(self.app_settings['cities'])
-            if self.app_settings['cities']:
+            use_all_comuni = self.app_settings.get('use_all_comuni', False)
+            if use_all_comuni:
+                # Load cities from database
+                conn = sqlite3.connect(database.DB_PATH)
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM cities WHERE status != 'done' ORDER BY id")
+                rows = cursor.fetchall()
+                conn.close()
+                cities = [row[0] for row in rows]
+                self.city_combo.addItems(cities)
+            else:
+                self.city_combo.addItems(self.app_settings['cities'])
+            if self.city_combo.count() > 0:
                 self.city_combo.setCurrentIndex(0)
             with open(SETTINGS_FILE, 'w') as f:
                 json.dump(self.app_settings, f)

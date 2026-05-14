@@ -1,3 +1,31 @@
-(comuni.csv is a data file, not a build artifact or temporary file, so no changes needed to .gitignore)
+```
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 
-(empty)
+# Database
+leadfalcon.db
+
+# Environment
+.env
+.env.local
+*.env.*
+
+# Dependencies
+venv/
+.venv/
+.env/
+
+# Logs
+*.log
+
+# Editors
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+```

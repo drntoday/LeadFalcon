@@ -1,7 +1,61 @@
 import sqlite3
 import os
+import csv
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "leadfalcon.db")
+
+
+def import_comuni_from_csv(csv_path):
+    """Import Italian municipalities from a CSV file into the cities table.
+    
+    Args:
+        csv_path: Path to the CSV file with columns 'name' and 'region'.
+        
+    Returns:
+        Number of new rows inserted, or -1 if an error occurred.
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        inserted_count = 0
+        batch_size = 100
+        batch = []
+        
+        with open(csv_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                # Support both column naming conventions
+                name = row.get('nome', row.get('name', '')).strip()
+                region = row.get('regione', row.get('region', '')).strip()
+                
+                if name and region:
+                    batch.append((name, region))
+                    
+                    if len(batch) >= batch_size:
+                        cursor.executemany(
+                            "INSERT OR IGNORE INTO cities (name, region) VALUES (?, ?)",
+                            batch
+                        )
+                        inserted_count += cursor.rowcount
+                        conn.commit()
+                        batch = []
+        
+        # Insert remaining rows
+        if batch:
+            cursor.executemany(
+                "INSERT OR IGNORE INTO cities (name, region) VALUES (?, ?)",
+                batch
+            )
+            inserted_count += cursor.rowcount
+            conn.commit()
+        
+        conn.close()
+        return inserted_count
+        
+    except Exception as e:
+        print(f"Error importing comuni: {e}")
+        return -1
 
 
 def initialize_db():
