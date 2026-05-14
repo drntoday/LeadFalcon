@@ -201,16 +201,17 @@ class LeadAgent(QObject):
             netloc = netloc.split(':')[0]
         return netloc
 
-    def _save_organization_lead(self, city, business_name, website, emails, phones):
+    def _save_organization_lead(self, city, business_name, website, emails, phones, lead_score=None):
         conn = sqlite3.connect(database.DB_PATH)
         cursor = conn.cursor()
         email = emails[0] if emails else None
         phone = phones[0] if phones else None
         lead_id = None
+        score = lead_score if lead_score is not None else 70
         try:
             cursor.execute(
-                "INSERT OR IGNORE INTO leads (record_type, business_name, email, phone, website, city, lead_score) VALUES ('ORGANIZATION', ?, ?, ?, ?, ?, 70)",
-                (business_name, email, phone, website, city)
+                "INSERT OR IGNORE INTO leads (record_type, business_name, email, phone, website, city, lead_score) VALUES ('ORGANIZATION', ?, ?, ?, ?, ?, ?)",
+                (business_name, email, phone, website, city, score)
             )
             if cursor.rowcount > 0:
                 lead_id = cursor.lastrowid
@@ -220,7 +221,7 @@ class LeadAgent(QObject):
                     'role': '',
                     'email': email,
                     'phone': phone,
-                    'lead_score': 70,
+                    'lead_score': score,
                     'source_urls': website
                 })
             # Fetch the lead_id (for duplicate case)
@@ -595,3 +596,83 @@ class LeadAgent(QObject):
         finally:
             conn.close()
         time.sleep(2)
+
+    def _execute_query(self, sql):
+        """Execute a read-only SELECT query and return results as JSON."""
+        if not sql.strip().upper().startswith("SELECT"):
+            return json.dumps({"error": "Only SELECT queries are allowed"})
+        conn = sqlite3.connect(database.DB_PATH)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(sql)
+            rows = cursor.fetchall()
+            return json.dumps([list(row) for row in rows])
+        except Exception as e:
+            return json.dumps({"error": str(e)})
+        finally:
+            conn.close()
+
+    def _save_lead_from_agent(self, args):
+        """Save a lead based on record_type from agent tool call arguments."""
+        record_type = args.get("record_type")
+        if record_type == "PERSON":
+            org_lead_id = args.get("parent_org_id")
+            email = args.get("email")
+            domain = args.get("domain", "")
+            result = self._save_person_lead(org_lead_id, email, domain)
+            if result:
+                return f"Lead saved with ID {result}"
+            else:
+                return "Duplicate, lead already exists"
+        elif record_type == "ORGANIZATION":
+            city = args["city"]
+            business_name = args.get("business_name", "")
+            website = args.get("website", "")
+            emails = [args["email"]] if args.get("email") else []
+            phones = [args["phone"]] if args.get("phone") else []
+            lead_score = args.get("lead_score", 70)
+            lead_id = self._save_organization_lead(city, business_name, website, emails, phones, lead_score)
+            if lead_id:
+                return f"Lead saved with ID {lead_id}"
+            else:
+                return "Duplicate, lead already exists"
+        else:
+            return "Invalid record_type"
+
+    def _execute_tool_call(self, tool_call):
+        """Execute a tool call returned by Groq and return the result as a string."""
+        try:
+            func_name = tool_call.function.name
+            args = json.loads(tool_call.function.arguments)
+            
+            if func_name == "search_web":
+                results = self.search_web(query=args["query"], max_results=args.get("max_results", 10))
+                return json.dumps(results)
+            elif func_name == "fetch_url":
+                html = self.fetch_url(url=args["url"])
+                if html is None:
+                    return ""
+                return html[:8000]
+            elif func_name == "extract_contacts_from_page":
+                result = self.extract_contacts_from_page(url=args["url"])
+                return json.dumps(result)
+            elif func_name == "query_db":
+                result = self._execute_query(args["sql"])
+                return result
+            elif func_name == "save_lead":
+                result = self._save_lead_from_agent(args)
+                return result
+            elif func_name == "google_places_search":
+                results = self.search_google_places(city=args["city"], query=args.get("keyword", "pelletteria"))
+                return json.dumps(results)
+            elif func_name == "mark_city_done":
+                self._mark_city_done(city_id=args["city_id"])
+                return "City marked done"
+            elif func_name == "discover_employees":
+                self._discover_employees(domain=args["domain"], org_lead_id=args["org_lead_id"])
+                return "Employee discovery complete"
+            else:
+                return f"Unknown tool: {func_name}"
+        except Exception as e:
+            self.status_updated.emit(f"Tool error: {str(e)}")
+            return f"Error: {str(e)}"
