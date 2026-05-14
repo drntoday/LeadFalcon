@@ -3,6 +3,7 @@ import sqlite3
 import hashlib
 import groq
 from PySide6.QtCore import QObject, Signal, Slot, QThread
+from duckduckgo_search import DDGS
 import database
 
 
@@ -60,11 +61,31 @@ class LeadAgent(QObject):
             keywords = self.generate_keywords_for_city(city_name)
             for keyword in keywords:
                 self.wait_if_paused()
-                print(keyword)
+                results = self.search_web(keyword)
+                print(len(results))
 
         if not self._stopped:
             self.status_updated.emit("All cities processed.")
             self.finished.emit()
+
+    def search_web(self, query, max_results=10):
+        self.status_updated.emit(f"Searching: {query}")
+        try:
+            results = []
+            with DDGS() as ddgs:
+                for result in ddgs.text(query, max_results=max_results):
+                    results.append({
+                        "title": result.get("title", ""),
+                        "url": result.get("url", ""),
+                        "snippet": result.get("body", "")
+                    })
+                    if len(results) >= max_results:
+                        break
+        except Exception as e:
+            self.status_updated.emit(f"Search error: {e}")
+            return []
+        time.sleep(2)
+        return results
 
     def wait_if_paused(self):
         while self._paused and not self._stopped:
