@@ -1,5 +1,5 @@
 import sys
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSpinBox, QLineEdit
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSpinBox, QLineEdit, QTableWidget
 from PySide6.QtGui import QAction
 
 
@@ -69,6 +69,14 @@ class MainWindow(QMainWindow):
         
         # Add filter layout to main layout
         layout.addLayout(filter_layout)
+        
+        # Create QTableWidget for leads
+        self.leads_table = QTableWidget()
+        self.leads_table.setObjectName("leads_table")
+        self.leads_table.setColumnCount(6)
+        self.leads_table.setHorizontalHeaderLabels(["Type", "Business / Person", "Role", "Email", "Phone", "Score"])
+        self.leads_table.setRowCount(0)
+        layout.addWidget(self.leads_table)
         
         # Add a status bar with "Ready" message
         self.statusBar().showMessage("Ready")
