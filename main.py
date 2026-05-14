@@ -1,6 +1,7 @@
 import sys
 import sqlite3
 import json
+import os
 from openpyxl import Workbook
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSpinBox, QLineEdit, QTableWidget, QDialog, QFormLayout, QTextEdit, QDialogButtonBox, QTableWidgetItem, QFileDialog, QMessageBox, QCheckBox, QPushButton
 from PySide6.QtGui import QAction
@@ -215,6 +216,7 @@ class MainWindow(QMainWindow):
         self.agent_thread.finished.connect(self.agent_thread.deleteLater)
         self.agent.status_updated.connect(lambda msg: self.statusBar().showMessage(msg))
         self.agent.lead_found.connect(self.on_lead_found)
+        self.agent.progress_updated.connect(self.on_progress_updated)
         
         # Load existing leads from database on startup
         self.load_leads()
@@ -274,6 +276,9 @@ class MainWindow(QMainWindow):
     def on_lead_found(self, lead_dict):
         row = self._lead_dict_to_tuple(lead_dict)
         self.add_lead_to_table(row)
+    
+    def on_progress_updated(self, city, leads_city, total_leads):
+        self.statusBar().showMessage(f"{city}: {leads_city} leads found, {total_leads} total")
     
     def closeEvent(self, event):
         if hasattr(self, 'agent') and hasattr(self, 'agent_thread'):

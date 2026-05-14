@@ -225,7 +225,7 @@ class LeadAgent(QObject):
             netloc = netloc.split(':')[0]
         return netloc
 
-    def _save_organization_lead(self, city, business_name, website, emails, phones, lead_score=None):
+    def _save_organization_lead(self, city, business_name, website, emails, phones, lead_score=None, role=None, linkedin_url=None):
         conn = sqlite3.connect(database.DB_PATH)
         cursor = conn.cursor()
         email = emails[0] if emails else None
@@ -234,18 +234,19 @@ class LeadAgent(QObject):
         score = lead_score if lead_score is not None else 70
         try:
             cursor.execute(
-                "INSERT OR IGNORE INTO leads (record_type, business_name, email, phone, website, city, lead_score) VALUES ('ORGANIZATION', ?, ?, ?, ?, ?, ?)",
-                (business_name, email, phone, website, city, score)
+                "INSERT OR IGNORE INTO leads (record_type, business_name, email, phone, website, city, lead_score, role, linkedin_url) VALUES ('ORGANIZATION', ?, ?, ?, ?, ?, ?, ?, ?)",
+                (business_name, email, phone, website, city, score, role, linkedin_url)
             )
             if cursor.rowcount > 0:
                 lead_id = cursor.lastrowid
                 self.lead_found.emit({
                     'record_type': 'ORGANIZATION',
                     'business_name': business_name,
-                    'role': '',
+                    'role': role or '',
                     'email': email,
                     'phone': phone,
                     'lead_score': score,
+                    'linkedin_url': linkedin_url or '',
                     'source_urls': website
                 })
             # Fetch the lead_id (for duplicate case)
@@ -319,7 +320,11 @@ class LeadAgent(QObject):
                     self.status_updated.emit("Max turns reached for city, moving on.")
                     break
 
-                response = self._groq_chat(messages)
+                try:
+                    response = self._groq_chat(messages)
+                except (IndexError, KeyError, AttributeError) as e:
+                    self.status_updated.emit(f"Invalid response from Groq: {str(e)}")
+                    break
                 if response is None:
                     break
 
@@ -610,20 +615,23 @@ class LeadAgent(QObject):
                     self._discover_employees(domain, org_lead_id)
             time.sleep(1)
 
-    def _save_person_lead(self, org_lead_id, email, domain):
+    def _save_person_lead(self, org_lead_id, email, domain, person_full_name=None, role=None, linkedin_url=None):
         conn = sqlite3.connect(database.DB_PATH)
         cursor = conn.cursor()
         try:
             cursor.execute(
-                "INSERT OR IGNORE INTO leads (record_type, parent_org_id, email, lead_score, source_urls) VALUES ('PERSON', ?, ?, 60, '')",
-                (org_lead_id, email)
+                "INSERT OR IGNORE INTO leads (record_type, parent_org_id, person_full_name, email, lead_score, source_urls, role, linkedin_url) VALUES ('PERSON', ?, ?, ?, 60, '', ?, ?)",
+                (org_lead_id, person_full_name or '', email, role, linkedin_url)
             )
             if cursor.rowcount > 0:
                 self.lead_found.emit({
                     'record_type': 'PERSON',
                     'parent_org_id': org_lead_id,
+                    'person_full_name': person_full_name or '',
+                    'role': role or '',
                     'email': email,
                     'lead_score': 60,
+                    'linkedin_url': linkedin_url or '',
                     'source_urls': ''
                 })
         finally:
@@ -673,7 +681,10 @@ class LeadAgent(QObject):
             org_lead_id = args.get("parent_org_id")
             email = args.get("email")
             domain = args.get("domain", "")
-            result = self._save_person_lead(org_lead_id, email, domain)
+            person_full_name = args.get("person_full_name")
+            role = args.get("role")
+            linkedin_url = args.get("linkedin_url")
+            result = self._save_person_lead(org_lead_id, email, domain, person_full_name, role, linkedin_url)
             if result:
                 return f"Lead saved with ID {result}"
             else:
@@ -685,7 +696,9 @@ class LeadAgent(QObject):
             emails = [args["email"]] if args.get("email") else []
             phones = [args["phone"]] if args.get("phone") else []
             lead_score = args.get("lead_score", 70)
-            lead_id = self._save_organization_lead(city, business_name, website, emails, phones, lead_score)
+            role = args.get("role")
+            linkedin_url = args.get("linkedin_url")
+            lead_id = self._save_organization_lead(city, business_name, website, emails, phones, lead_score, role, linkedin_url)
             if lead_id:
                 return f"Lead saved with ID {lead_id}"
             else:
