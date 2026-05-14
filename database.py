@@ -2,19 +2,37 @@ import sqlite3
 import os
 import csv
 import traceback
+import curl_cffi.requests
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "leadfalcon.db")
+CSV_URL = "https://raw.githubusercontent.com/MatteoRagni/Italian-Comuni-List/master/comuni.csv"
 
 
-def import_comuni_from_csv(csv_path):
+def import_comuni_from_csv(csv_path, progress_callback=None):
     """Import Italian municipalities from a CSV file into the cities table.
     
     Args:
-        csv_path: Path to the CSV file with columns 'name' and 'region'.
+        csv_path: Path to the CSV file with columns 'nome' and 'regione'.
+        progress_callback: Optional callback function(current_row, total_rows) called every 100 rows.
         
     Returns:
-        Number of new rows inserted, or -1 if an error occurred.
+        Number of new rows inserted.
+        
+    Raises:
+        FileNotFoundError: If the CSV file does not exist and cannot be downloaded.
+        ValueError: If the CSV file is invalid or missing required columns.
     """
+    # Check if file exists, if not download it
+    if not os.path.exists(csv_path):
+        try:
+            response = curl_cffi.requests.get(CSV_URL)
+            if response.status_code != 200:
+                raise FileNotFoundError(f"Failed to download CSV: HTTP {response.status_code}")
+            with open(csv_path, 'w', encoding='utf-8') as f:
+                f.write(response.text)
+        except Exception as e:
+            raise FileNotFoundError(f"Could not download or access CSV file: {e}")
+    
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -25,7 +43,26 @@ def import_comuni_from_csv(csv_path):
         
         with open(csv_path, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
-            for row in reader:
+            
+            # Validate that required columns exist
+            if reader.fieldnames is None:
+                raise ValueError("CSV file is empty or has no headers")
+            
+            # Check for required columns (support both Italian and English naming)
+            valid_name_cols = {'nome', 'name'}
+            valid_region_cols = {'regione', 'region'}
+            
+            has_name = any(col in reader.fieldnames for col in valid_name_cols)
+            has_region = any(col in reader.fieldnames for col in valid_region_cols)
+            
+            if not has_name or not has_region:
+                raise ValueError(f"CSV must contain 'nome' (or 'name') and 'regione' (or 'region') columns. Found: {reader.fieldnames}")
+            
+            # Count total rows for progress reporting
+            rows_list = list(reader)
+            total_rows = len(rows_list)
+            
+            for i, row in enumerate(rows_list):
                 # Support both column naming conventions
                 name = row.get('nome', row.get('name', '')).strip()
                 region = row.get('regione', row.get('region', '')).strip()
@@ -41,6 +78,10 @@ def import_comuni_from_csv(csv_path):
                         inserted_count += cursor.rowcount
                         conn.commit()
                         batch = []
+                
+                # Call progress callback every 100 rows
+                if progress_callback and (i + 1) % 100 == 0:
+                    progress_callback(i + 1, total_rows)
         
         # Insert remaining rows
         if batch:
@@ -51,13 +92,17 @@ def import_comuni_from_csv(csv_path):
             inserted_count += cursor.rowcount
             conn.commit()
         
+        # Final progress callback
+        if progress_callback:
+            progress_callback(total_rows, total_rows)
+        
         conn.close()
         return inserted_count
         
     except Exception as e:
         print(f"Error importing comuni: {e}")
         traceback.print_exc()
-        return -1
+        raise
 
 
 def initialize_db():

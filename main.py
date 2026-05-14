@@ -5,12 +5,36 @@ import os
 from openpyxl import Workbook
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QTableWidget, QDialog, QFormLayout, QDialogButtonBox, QTableWidgetItem, QFileDialog, QPushButton, QLineEdit, QComboBox, QCheckBox
 from PySide6.QtGui import QAction
-from PySide6.QtCore import QThread, QTimer
+from PySide6.QtCore import QThread, QTimer, QObject, Signal
 
 import database
 from agent import LeadAgent
 
 SETTINGS_FILE = "settings.json"
+
+
+class MunicipalityLoader(QObject):
+    """Worker class to load municipalities from CSV in a background thread."""
+    
+    progress = Signal(int, int, str)  # current, total, message
+    finished = Signal(int)  # new_rows
+    
+    def __init__(self, csv_path):
+        super().__init__()
+        self.csv_path = csv_path
+    
+    def _on_progress(self, current, total):
+        """Internal callback that emits the progress signal."""
+        self.progress.emit(current, total, f"Loading municipalities: {current}/{total}")
+    
+    def load(self):
+        """Load municipalities from CSV and emit progress/finished signals."""
+        try:
+            new_rows = database.import_comuni_from_csv(self.csv_path, progress_callback=self._on_progress)
+            self.finished.emit(new_rows)
+        except Exception as e:
+            self.progress.emit(0, 0, f"Error loading municipalities: {e}")
+            self.finished.emit(0)
 
 
 class SettingsDialog(QDialog):
@@ -120,8 +144,10 @@ class MainWindow(QMainWindow):
         # Add a status bar with "Ready" message
         self.statusBar().showMessage("Ready")
         
-        # Initialize database and load municipalities automatically
+        # Initialize database
         database.initialize_db()
+        
+        # Check if municipalities need to be loaded
         conn = sqlite3.connect(database.DB_PATH)
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM cities")
@@ -129,12 +155,25 @@ class MainWindow(QMainWindow):
         conn.close()
         
         if count == 0:
+            # Show loading status and start background loader
+            self.statusBar().showMessage("Loading municipalities...")
+            
             csv_path = os.path.join(os.path.dirname(__file__), "comuni.csv")
-            result = database.import_comuni_from_csv(csv_path)
-            if result >= 0:
-                self.statusBar().showMessage(f"Loaded {result} Italian municipalities")
-            else:
-                self.statusBar().showMessage("Failed to load municipalities")
+            
+            # Create thread and loader for background loading
+            self.load_thread = QThread()
+            self.municipality_loader = MunicipalityLoader(csv_path)
+            self.municipality_loader.moveToThread(self.load_thread)
+            
+            # Connect signals
+            self.municipality_loader.progress.connect(self.on_load_progress)
+            self.municipality_loader.finished.connect(self.on_load_finished)
+            self.load_thread.started.connect(self.municipality_loader.load)
+            self.municipality_loader.finished.connect(self.load_thread.quit)
+            self.load_thread.finished.connect(self.load_thread.deleteLater)
+            
+            # Start the thread
+            self.load_thread.start()
         
         # Create agent thread and agent
         self.agent_thread = QThread()
@@ -215,6 +254,17 @@ class MainWindow(QMainWindow):
     
     def on_progress_updated(self, city, leads_city, total_leads):
         self.statusBar().showMessage(f"{city}: {leads_city} leads found, {total_leads} total")
+    
+    def on_load_progress(self, current, total, message):
+        """Slot for municipality loading progress updates."""
+        self.statusBar().showMessage(f"Loading municipalities: {current}/{total}")
+    
+    def on_load_finished(self, new_rows):
+        """Slot for when municipality loading is complete."""
+        self.statusBar().showMessage(f"{new_rows} municipalities loaded.")
+        # If auto-start is enabled, trigger agent start after loading completes
+        if self.app_settings.get("auto_start", False) and not self.agent_thread.isRunning():
+            QTimer.singleShot(500, self.on_start)
     
     def closeEvent(self, event):
         if hasattr(self, 'agent') and hasattr(self, 'agent_thread'):
