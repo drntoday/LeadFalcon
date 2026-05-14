@@ -201,12 +201,13 @@ class LeadAgent(QObject):
         self._paused = False
         self.status_updated.emit("Stopped.")
 
-    def _mark_search_result_extracted(self, result_id):
-        conn = sqlite3.connect(database.DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("UPDATE search_results SET extracted = 1 WHERE id = ?", (result_id,))
-        conn.commit()
-        conn.close()
+    # UNUSED METHOD - commented out as per cleanup
+    # def _mark_search_result_extracted(self, result_id):
+    #     conn = sqlite3.connect(database.DB_PATH)
+    #     cursor = conn.cursor()
+    #     cursor.execute("UPDATE search_results SET extracted = 1 WHERE id = ?", (result_id,))
+    #     conn.commit()
+    #     conn.close()
 
     def _mark_city_done(self, city_id):
         conn = sqlite3.connect(database.DB_PATH)
@@ -268,18 +269,19 @@ class LeadAgent(QObject):
             conn.commit()
             conn.close()
 
-    def _guess_business_name(self, title, url):
-        if title:
-            for sep in [' - ', ' | ', ' – ']:
-                if sep in title:
-                    return title.split(sep)[0].strip()
-            return title.strip()
-        # Extract domain from URL
-        domain = url
-        domain = re.sub(r'^https?://', '', domain)
-        domain = re.sub(r'^www\.', '', domain)
-        domain = domain.split('/')[0]
-        return domain
+    # UNUSED METHOD - commented out as per cleanup
+    # def _guess_business_name(self, title, url):
+    #         if title:
+    #             for sep in [' - ', ' | ', ' – ']:
+    #                 if sep in title:
+    #                     return title.split(sep)[0].strip()
+    #             return title.strip()
+    #         # Extract domain from URL
+    #         domain = url
+    #         domain = re.sub(r'^https?://', '', domain)
+    #         domain = re.sub(r'^www\.', '', domain)
+    #         domain = domain.split('/')[0]
+    #         return domain
 
     def run(self):
         self.status_updated.emit("Agent started.")
@@ -294,11 +296,11 @@ class LeadAgent(QObject):
             self.finished.emit()
             return
 
-        for city in rows:
+        for city_row in rows:
             if self._stopped:
                 break
             self.wait_if_paused()
-            city_id, city_name, region = city
+            city_id, city_name, region = city_row
             self.status_updated.emit(f"Processing city: {city_name}")
             self.progress_updated.emit(city_name, 0, 0)
 
@@ -328,7 +330,11 @@ class LeadAgent(QObject):
                 if response is None:
                     break
 
-                message = response.choices[0].message
+                try:
+                    message = response.choices[0].message
+                except Exception as e:
+                    self.status_updated.emit(f"Error accessing response message: {str(e)}")
+                    break
 
                 if message.content:
                     truncated_content = message.content[:80] + "..." if len(message.content) > 80 else message.content
@@ -426,7 +432,12 @@ class LeadAgent(QObject):
             self.status_updated.emit("Groq API key not set.")
             self.groq_client = None
             return
-        self.groq_client = groq.Client(api_key=key)
+        try:
+            self.groq_client = groq.Client(api_key=key)
+        except Exception as e:
+            self.status_updated.emit(f"Error creating Groq client: {e}")
+            self.groq_client = None
+            return
 
     def _groq_chat(self, messages):
         self._ensure_groq_client()
@@ -446,83 +457,95 @@ class LeadAgent(QObject):
             self.status_updated.emit(f"Groq API error: {str(e)}")
             return None
 
-    def generate_keywords_for_city(self, city_name):
-        self._ensure_groq_client()
-        if self.groq_client is None:
-            return []
-        prompt = f"Generate 8 search queries to find Italian leather goods retailers, boutiques, and wholesalers in {city_name}. Use Italian words like 'pelletteria', 'borse in pelle', 'negozio accessori moda', and 'rivenditore'. Return only a JSON array of strings, no explanation."
-        response = self.groq_client.chat.completions.create(
-            model="llama-3.1-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            max_tokens=500
-        )
-        try:
-            import json
-            keywords = json.loads(response.choices[0].message.content)
-            return keywords
-        except Exception:
-            self.status_updated.emit("Failed to parse keyword response.")
-            return []
+    # UNUSED METHOD - commented out as per cleanup
+    # def generate_keywords_for_city(self, city_name):
+    #         self._ensure_groq_client()
+    #         if self.groq_client is None:
+    #             return []
+    #         prompt = f"Generate 8 search queries to find Italian leather goods retailers, boutiques, and wholesalers in {city_name}. Use Italian words like 'pelletteria', 'borse in pelle', 'negozio accessori moda', and 'rivenditore'. Return only a JSON array of strings, no explanation."
+    #         response = self.groq_client.chat.completions.create(
+    #             model="llama-3.1-70b-versatile",
+    #             messages=[{"role": "user", "content": prompt}],
+    #             temperature=0.7,
+    #             max_tokens=500
+    #         )
+    #         try:
+    #             import json
+    #             keywords = json.loads(response.choices[0].message.content)
+    #             return keywords
+    #         except Exception:
+    #             self.status_updated.emit("Failed to parse keyword response.")
+    #             return []
+    #
 
-    def _get_or_create_keyword(self, city_id, keyword_text):
-        keyword_hash = hashlib.sha256(f"{city_id}{keyword_text}".encode()).hexdigest()
-        conn = None
-        try:
-            conn = sqlite3.connect(database.DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute("SELECT id FROM keywords WHERE keyword_hash = ?", (keyword_hash,))
-            row = cursor.fetchone()
-            if row:
-                return row[0]
-            cursor.execute("INSERT INTO keywords (city_id, keyword_hash, keyword_text) VALUES (?, ?, ?)",
-                           (city_id, keyword_hash, keyword_text))
-            conn.commit()
-            return cursor.lastrowid
-        except Exception as e:
-            self.status_updated.emit(f"Keyword error: {e}")
-            return None
-        finally:
-            if conn:
-                conn.close()
 
-    def _get_or_create_search_query(self, city_id, keyword_id):
-        conn = None
-        try:
-            conn = sqlite3.connect(database.DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute("SELECT id FROM search_queries WHERE keyword_id = ?", (keyword_id,))
-            row = cursor.fetchone()
-            if row:
-                self.status_updated.emit("Search query already recorded, skipping.")
-                return None
-            cursor.execute("INSERT INTO search_queries (city_id, keyword_id, source) VALUES (?, ?, ?)",
-                           (city_id, keyword_id, 'web'))
-            conn.commit()
-            return cursor.lastrowid
-        except Exception as e:
-            self.status_updated.emit(f"Search query error: {e}")
-            return None
-        finally:
-            if conn:
-                conn.close()
+    # UNUSED METHOD - commented out as per cleanup
+    # def _get_or_create_keyword(self, city_id, keyword_text):
+    #         keyword_hash = hashlib.sha256(f"{city_id}{keyword_text}".encode()).hexdigest()
+    #         conn = None
+    #         try:
+    #             conn = sqlite3.connect(database.DB_PATH)
+    #             cursor = conn.cursor()
+    #             cursor.execute("SELECT id FROM keywords WHERE keyword_hash = ?", (keyword_hash,))
+    #             row = cursor.fetchone()
+    #             if row:
+    #                 return row[0]
+    #             cursor.execute("INSERT INTO keywords (city_id, keyword_hash, keyword_text) VALUES (?, ?, ?)",
+    #                            (city_id, keyword_hash, keyword_text))
+    #             conn.commit()
+    #             return cursor.lastrowid
+    #         except Exception as e:
+    #             self.status_updated.emit(f"Keyword error: {e}")
+    #             return None
+    #         finally:
+    #             if conn:
+    #                 conn.close()
+    #
 
-    def _store_search_results(self, query_id, results):
-        conn = None
-        try:
-            conn = sqlite3.connect(database.DB_PATH)
-            cursor = conn.cursor()
-            for result in results:
-                cursor.execute(
-                    "INSERT OR IGNORE INTO search_results (query_id, url, title, snippet) VALUES (?, ?, ?, ?)",
-                    (query_id, result.get("url", ""), result.get("title", ""), result.get("snippet", ""))
-                )
-            conn.commit()
-        except Exception as e:
-            self.status_updated.emit(f"Failed to store search results: {e}")
-        finally:
-            if conn:
-                conn.close()
+
+    # UNUSED METHOD - commented out as per cleanup
+    # def _get_or_create_search_query(self, city_id, keyword_id):
+    #         conn = None
+    #         try:
+    #             conn = sqlite3.connect(database.DB_PATH)
+    #             cursor = conn.cursor()
+    #             cursor.execute("SELECT id FROM search_queries WHERE keyword_id = ?", (keyword_id,))
+    #             row = cursor.fetchone()
+    #             if row:
+    #                 self.status_updated.emit("Search query already recorded, skipping.")
+    #                 return None
+    #             cursor.execute("INSERT INTO search_queries (city_id, keyword_id, source) VALUES (?, ?, ?)",
+    #                            (city_id, keyword_id, 'web'))
+    #             conn.commit()
+    #             return cursor.lastrowid
+    #         except Exception as e:
+    #             self.status_updated.emit(f"Search query error: {e}")
+    #             return None
+    #         finally:
+    #             if conn:
+    #                 conn.close()
+    #
+
+
+    # UNUSED METHOD - commented out as per cleanup
+    # def _store_search_results(self, query_id, results):
+    #         conn = None
+    #         try:
+    #             conn = sqlite3.connect(database.DB_PATH)
+    #             cursor = conn.cursor()
+    #             for result in results:
+    #                 cursor.execute(
+    #                     "INSERT OR IGNORE INTO search_results (query_id, url, title, snippet) VALUES (?, ?, ?, ?)",
+    #                     (query_id, result.get("url", ""), result.get("title", ""), result.get("snippet", ""))
+    #                 )
+    #             conn.commit()
+    #         except Exception as e:
+    #             self.status_updated.emit(f"Failed to store search results: {e}")
+    #         finally:
+    #             if conn:
+    #                 conn.close()
+    #
+
 
     def extract_contacts_from_text(self, text):
         emails = set()
@@ -596,24 +619,27 @@ class LeadAgent(QObject):
             self.status_updated.emit(f"Google Places error: {e}")
             return []
 
-    def _process_google_places(self, city_name):
-        places = self.search_google_places(city_name)
-        for place in places:
-            if self._stopped:
-                break
-            self.wait_if_paused()
-            org_lead_id = self._save_organization_lead(
-                city_name,
-                place["name"],
-                place["website"],
-                emails=[],
-                phones=[place["phone"]]
-            )
-            if org_lead_id is not None and place["website"]:
-                domain = self._extract_domain(place["website"])
-                if domain:
-                    self._discover_employees(domain, org_lead_id)
-            time.sleep(1)
+    # UNUSED METHOD - commented out as per cleanup
+    # def _process_google_places(self, city_name):
+    #         places = self.search_google_places(city_name)
+    #         for place in places:
+    #             if self._stopped:
+    #                 break
+    #             self.wait_if_paused()
+    #             org_lead_id = self._save_organization_lead(
+    #                 city_name,
+    #                 place["name"],
+    #                 place["website"],
+    #                 emails=[],
+    #                 phones=[place["phone"]]
+    #             )
+    #             if org_lead_id is not None and place["website"]:
+    #                 domain = self._extract_domain(place["website"])
+    #                 if domain:
+    #                     self._discover_employees(domain, org_lead_id)
+    #             time.sleep(1)
+    #
+
 
     def _save_person_lead(self, org_lead_id, email, domain, person_full_name=None, role=None, linkedin_url=None):
         conn = sqlite3.connect(database.DB_PATH)
