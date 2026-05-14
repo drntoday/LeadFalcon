@@ -23,15 +23,14 @@ You have access to tools:
 - extract_contacts_from_page: fetch a URL and automatically extract emails and phone numbers.
 - query_db: run SELECT queries to check for duplicates, see existing leads, or check city/keyword status.
 - save_lead: store a discovered lead (organization or person) after verifying it's not a duplicate.
-- google_places_search: get structured business data (name, address, phone, website) from Google Places.
 - mark_city_done: call this when you are confident you have exhausted the city.
 - discover_employees: search for employee email addresses from an organization's domain and save them.
 
 Strategy:
-1. Start by searching the web with multiple Italian phrases (pelletteria, borse in pelle, negozio accessori moda, rivenditore, etc.) combined with the city name.
+1. Start by searching the web with multiple Italian phrases combined with the city name, e.g., "pelletteria Roma Pagine Gialle", "borse pelle Milano contatti", "negozi accessori moda Torino telefono".
 2. For promising URLs from search results, use extract_contacts_from_page to quickly get contacts. If a page has no contact info, skip it.
 3. If you find a business website, save the organization lead with a score based on confidence (70-90). Then use discover_employees on its domain.
-4. Also use google_places_search to find brick-and-mortar stores.
+4. Prioritize extracting phone numbers and emails from Italian public directories and business listings.
 5. Always check for duplicates via query_db before saving. 
 6. If a city yields very few results, try broader queries (e.g., "negozi abbigliamento {city}").
 7. When you have tried multiple angles and found all reasonable leads, call mark_city_done.
@@ -134,21 +133,6 @@ class LeadAgent(QObject):
                             "parent_org_id": {"type": "integer"}
                         },
                         "required": ["record_type", "city", "lead_score"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "google_places_search",
-                    "description": "Search Google Places for businesses matching a keyword in a city. Returns structured business data (name, address, phone, website).",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "city": {"type": "string"},
-                            "keyword": {"type": "string", "default": "pelletteria"}
-                        },
-                        "required": ["city"]
                     }
                 }
             },
@@ -575,50 +559,6 @@ class LeadAgent(QObject):
             return {"emails": [], "phones": []}
         return self.extract_contacts_from_text(html)
 
-    def search_google_places(self, city, query="pelletteria"):
-        places_key = self.settings.get("places_key")
-        if not places_key:
-            self.status_updated.emit("Google Places API key not set.")
-            return []
-        
-        headers = {
-            "Content-Type": "application/json",
-            "X-Goog-Api-Key": places_key,
-            "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.internationalPhoneNumber,places.websiteUri,places.id"
-        }
-        json_body = {"textQuery": f"{query} in {city}, Italy"}
-        
-        try:
-            response = requests.post(
-                "https://places.googleapis.com/v1/places:searchText",
-                headers=headers,
-                json=json_body,
-                impersonate="chrome",
-                timeout=15
-            )
-            
-            if response.status_code != 200:
-                self.status_updated.emit(f"Google Places API error: status {response.status_code}")
-                return []
-            
-            data = response.json()
-            results = []
-            for place in data.get("places", []):
-                display_name = place.get("displayName", {})
-                results.append({
-                    "name": display_name.get("text", ""),
-                    "address": place.get("formattedAddress", ""),
-                    "phone": place.get("internationalPhoneNumber", ""),
-                    "website": place.get("websiteUri", ""),
-                    "place_id": place.get("id", "")
-                })
-            
-            self.status_updated.emit(f"Google Places: found {len(results)} results for {city}")
-            return results
-        except Exception as e:
-            self.status_updated.emit(f"Google Places error: {e}")
-            return []
-
     # UNUSED METHOD - commented out as per cleanup
     # def _process_google_places(self, city_name):
     #         places = self.search_google_places(city_name)
@@ -755,9 +695,6 @@ class LeadAgent(QObject):
             elif func_name == "save_lead":
                 result = self._save_lead_from_agent(args)
                 return result
-            elif func_name == "google_places_search":
-                results = self.search_google_places(city=args["city"], query=args.get("keyword", "pelletteria"))
-                return json.dumps(results)
             elif func_name == "mark_city_done":
                 self._mark_city_done(city_id=args["city_id"])
                 return "City marked done"

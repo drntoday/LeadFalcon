@@ -3,7 +3,7 @@ import sqlite3
 import json
 import os
 from openpyxl import Workbook
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSpinBox, QLineEdit, QTableWidget, QDialog, QFormLayout, QTextEdit, QDialogButtonBox, QTableWidgetItem, QFileDialog, QMessageBox, QCheckBox, QPushButton
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QComboBox, QSpinBox, QLineEdit, QTableWidget, QDialog, QFormLayout, QDialogButtonBox, QTableWidgetItem, QFileDialog, QPushButton
 from PySide6.QtGui import QAction
 from PySide6.QtCore import QThread
 
@@ -31,50 +31,14 @@ class SettingsDialog(QDialog):
         self.groq_key_edit.setObjectName("groq_key")
         form_layout.addRow("Groq API Key", self.groq_key_edit)
         
-        # Google Places API Key
-        self.places_key_edit = QLineEdit()
-        self.places_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.places_key_edit.setObjectName("places_key")
-        form_layout.addRow("Google Places API Key", self.places_key_edit)
-        
         # Scraping Speed
         self.speed_combo = QComboBox()
         self.speed_combo.addItems(["Polite", "Aggressive"])
         self.speed_combo.setObjectName("speed_combo")
         form_layout.addRow("Scraping Speed", self.speed_combo)
         
-        # Cities
-        self.cities_edit = QTextEdit()
-        self.cities_edit.setObjectName("cities_edit")
-        self.cities_edit.setFixedHeight(150)
-        cities_text = """Roma
-Milano
-Napoli
-Torino
-Palermo
-Genova
-Bologna
-Firenze
-Catania
-Bari
-Venezia
-Verona"""
-        self.cities_edit.setPlainText(cities_text)
-        form_layout.addRow("Cities", self.cities_edit)
-        
         # Add form layout to main layout
         main_layout.addLayout(form_layout)
-        
-        # Use all Italian municipalities checkbox
-        self.comuni_checkbox = QCheckBox("Use all Italian municipalities")
-        self.comuni_checkbox.setObjectName("comuni_checkbox")
-        main_layout.addWidget(self.comuni_checkbox)
-        
-        # Load Municipalities button
-        load_muni_button = QPushButton("Load Municipalities")
-        load_muni_button.setObjectName("load_muni_button")
-        load_muni_button.clicked.connect(self.on_load_municipalities)
-        main_layout.addWidget(load_muni_button)
         
         # Button box
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -82,23 +46,10 @@ Verona"""
         button_box.rejected.connect(self.reject)
         main_layout.addWidget(button_box)
     
-    def on_load_municipalities(self):
-        csv_path = database.DB_PATH.replace("leadfalcon.db", "comuni.csv")
-        if not os.path.exists(csv_path):
-            csv_path = os.path.join(os.path.dirname(__file__), "comuni.csv")
-        result = database.import_comuni_from_csv(csv_path)
-        if result >= 0:
-            QMessageBox.information(self, "Municipalities Loaded", f"Inserted {result} new municipalities.")
-        else:
-            QMessageBox.critical(self, "Error", "Failed to load municipalities.")
-    
     def on_accepted(self):
         self.settings = {
             "groq_key": self.groq_key_edit.text(),
-            "places_key": self.places_key_edit.text(),
-            "speed": self.speed_combo.currentText(),
-            "cities": [line for line in self.cities_edit.toPlainText().split("\n") if line.strip()],
-            "use_all_comuni": self.comuni_checkbox.isChecked()
+            "speed": self.speed_combo.currentText()
         }
         self.accept()
 
@@ -139,62 +90,12 @@ class MainWindow(QMainWindow):
         self.export_action.triggered.connect(self.on_export)
         toolbar.addAction(self.export_action)
         
-        # Create central widget with QVBoxLayout
+        # Create central widget with QVBoxLayout - only the leads table
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
         
-        # Create horizontal layout for filter controls
-        filter_layout = QHBoxLayout()
-        
-        # City label and combo box
-        city_label = QLabel("City:")
-        filter_layout.addWidget(city_label)
-        
-        self.city_combo = QComboBox()
-        self.city_combo.setObjectName("city_combo")
-        filter_layout.addWidget(self.city_combo)
-        
-        # Populate city_combo based on use_all_comuni setting
-        use_all_comuni = self.app_settings.get('use_all_comuni', False)
-        if use_all_comuni:
-            # Load cities from database
-            conn = sqlite3.connect(database.DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM cities WHERE status != 'done' ORDER BY id")
-            rows = cursor.fetchall()
-            conn.close()
-            cities = [row[0] for row in rows]
-            self.city_combo.addItems(cities)
-        else:
-            # Use user-defined list from settings
-            cities = self.app_settings.get('cities', [])
-            if cities:
-                self.city_combo.addItems(cities)
-        
-        # Min Score label and spin box
-        score_label = QLabel("Min Score:")
-        filter_layout.addWidget(score_label)
-        
-        self.score_spin = QSpinBox()
-        self.score_spin.setObjectName("score_spin")
-        self.score_spin.setRange(0, 100)
-        self.score_spin.setValue(50)
-        filter_layout.addWidget(self.score_spin)
-        
-        # Search label and line edit
-        search_label = QLabel("Search:")
-        filter_layout.addWidget(search_label)
-        
-        self.search_edit = QLineEdit()
-        self.search_edit.setObjectName("search_edit")
-        self.search_edit.setPlaceholderText("Search...")
-        filter_layout.addWidget(self.search_edit)
-        
-        # Add filter layout to main layout
-        layout.addLayout(filter_layout)
-        
-        # Create QTableWidget for leads
+        # Create QTableWidget for leads - occupies all space
         self.leads_table = QTableWidget()
         self.leads_table.setObjectName("leads_table")
         self.leads_table.setColumnCount(6)
@@ -204,6 +105,22 @@ class MainWindow(QMainWindow):
         
         # Add a status bar with "Ready" message
         self.statusBar().showMessage("Ready")
+        
+        # Initialize database and load municipalities automatically
+        database.initialize_db()
+        conn = sqlite3.connect(database.DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM cities")
+        count = cursor.fetchone()[0]
+        conn.close()
+        
+        if count == 0:
+            csv_path = os.path.join(os.path.dirname(__file__), "comuni.csv")
+            result = database.import_comuni_from_csv(csv_path)
+            if result >= 0:
+                self.statusBar().showMessage(f"Loaded {result} Italian municipalities")
+            else:
+                self.statusBar().showMessage("Failed to load municipalities")
         
         # Create agent thread and agent
         self.agent_thread = QThread()
@@ -308,28 +225,8 @@ class MainWindow(QMainWindow):
     
     def on_settings(self):
         self.settings_dialog = SettingsDialog(self)
-        # Pre-populate checkbox state from settings
-        if 'use_all_comuni' in self.app_settings:
-            self.settings_dialog.comuni_checkbox.setChecked(self.app_settings.get('use_all_comuni', False))
         if self.settings_dialog.exec() == QDialog.Accepted:
             self.app_settings = self.settings_dialog.settings
-            self.city_combo.clear()
-            use_all_comuni = self.app_settings.get('use_all_comuni', False)
-            if use_all_comuni:
-                # Load cities from database
-                conn = sqlite3.connect(database.DB_PATH)
-                cursor = conn.cursor()
-                cursor.execute("SELECT name FROM cities WHERE status != 'done' ORDER BY id")
-                rows = cursor.fetchall()
-                conn.close()
-                cities = [row[0] for row in rows]
-                self.city_combo.addItems(cities)
-            else:
-                cities = self.app_settings.get('cities', [])
-                if cities:
-                    self.city_combo.addItems(cities)
-            if self.city_combo.count() > 0:
-                self.city_combo.setCurrentIndex(0)
             with open(SETTINGS_FILE, 'w') as f:
                 json.dump(self.app_settings, f)
     
