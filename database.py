@@ -75,6 +75,12 @@ def initialize_db():
         )
     """)
 
+    # Add plan column to cities table if it doesn't exist
+    cursor.execute("PRAGMA table_info(cities)")
+    columns = [col[1] for col in cursor.fetchall()]
+    if 'plan' not in columns:
+        cursor.execute("ALTER TABLE cities ADD COLUMN plan TEXT")
+
     # Create keywords table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS keywords (

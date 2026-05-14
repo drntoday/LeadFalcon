@@ -1,6 +1,5 @@
 import time
 import sqlite3
-import hashlib
 import groq
 import json
 from PySide6.QtCore import QObject, Signal, Slot, QThread
@@ -14,26 +13,12 @@ import database
 from urllib.parse import urlparse
 
 
-SYSTEM_PROMPT = """
-You are an expert Italian B2B lead researcher. Your goal is to find high-quality contact details (email, phone, owner name, buyer contacts) of leather-goods retailers, boutiques, and wholesalers in the current city. 
-
-You have access to tools: 
-- search_web: search for businesses, contact pages, directories.
-- fetch_url: retrieve the full text of a webpage.
-- extract_contacts_from_page: fetch a URL and automatically extract emails and phone numbers.
-- query_db: run SELECT queries to check for duplicates, see existing leads, or check city/keyword status.
-- save_lead: store a discovered lead (organization or person) after verifying it's not a duplicate.
-- mark_city_done: call this when you are confident you have exhausted the city.
-- discover_employees: search for employee email addresses from an organization's domain and save them.
-
-Strategy:
-1. Start by searching the web with multiple Italian phrases combined with the city name, e.g., "pelletteria Roma Pagine Gialle", "borse pelle Milano contatti", "negozi accessori moda Torino telefono". Use these searches to find Italian business directories like Pagine Gialle, Yelp Italia, or local chamber of commerce listings.
-2. For promising URLs from search results, use extract_contacts_from_page to quickly get contacts. If a page has no contact info, skip it.
-3. If you find a business website, save the organization lead with a score based on confidence (70-90). Then use discover_employees on its domain.
-4. Prioritize extracting phone numbers and emails from Italian public directories and business listings. Focus on getting structured data from directory snippets and full page fetches.
-5. Always check for duplicates via query_db before saving. 
-6. If a city yields very few results, try broader queries (e.g., "negozi abbigliamento {city}").
-7. When you have tried multiple angles and found all reasonable leads, call mark_city_done.
+PLANNER_PROMPT = """
+You are an expert lead-generation planner for Italian leather goods businesses. For the given city, generate a list of 20–30 search queries that will find retailers, boutiques, wholesalers, and artisans of leather bags, wallets, belts, and accessories. 
+- Use Italian keywords extensively: pelletteria, borse in pelle, accessori moda, articoli da regalo, negozio di pelletteria, rivenditore, artigiano, produzione pelle, etc.
+- Include queries that combine these with the city name and phrases like "telefono", "email", "contatti", "partita iva", "indirizzo".
+- Also include 2–3 specific site searches on Italian directories like site:paginegialle.it, site:kompass.it, site:infobel.com.
+- Return ONLY a JSON array of strings, no other text. Example: ["pelletteria Roma telefono", "borse in pelle Milano contatti", ...]
 """
 
 
@@ -43,129 +28,12 @@ class LeadAgent(QObject):
     progress_updated = Signal(str, int, int)
     finished = Signal()
 
-    TOOLS = []
-
     def __init__(self, parent=None, settings=None):
         super().__init__(parent)
         self._paused = False
         self._stopped = False
         self.settings = settings if settings is not None else {}
         self.groq_client = None
-        self._register_tools()
-
-    def _register_tools(self):
-        self.TOOLS = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "search_web",
-                    "description": "Search the web for the given query and return a list of results with title, url, snippet.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {"type": "string"},
-                            "max_results": {"type": "integer", "default": 10}
-                        },
-                        "required": ["query"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "fetch_url",
-                    "description": "Fetch the full HTML text of a given URL. Use this to extract contact details.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "url": {"type": "string"}
-                        },
-                        "required": ["url"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "extract_contacts_from_page",
-                    "description": "Fetch a URL and extract emails and phone numbers found on it. Returns a dictionary with 'emails' and 'phones' lists.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "url": {"type": "string"}
-                        },
-                        "required": ["url"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "query_db",
-                    "description": "Execute a read-only SQL query on the local database and return results as JSON. Use this to check for duplicates or retrieve existing data.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "sql": {"type": "string"}
-                        },
-                        "required": ["sql"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "save_lead",
-                    "description": "Save a new lead (organization or person) to the database. Provide all available details. The method will deduplicate automatically. Returns success status.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "record_type": {"type": "string", "enum": ["ORGANIZATION", "PERSON"]},
-                            "business_name": {"type": "string"},
-                            "person_full_name": {"type": "string"},
-                            "role": {"type": "string"},
-                            "email": {"type": "string"},
-                            "phone": {"type": "string"},
-                            "website": {"type": "string"},
-                            "linkedin_url": {"type": "string"},
-                            "city": {"type": "string"},
-                            "lead_score": {"type": "integer", "minimum": 0, "maximum": 100},
-                            "parent_org_id": {"type": "integer"}
-                        },
-                        "required": ["record_type", "city", "lead_score"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "mark_city_done",
-                    "description": "Mark a city as completed in the database.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "city_id": {"type": "integer"}
-                        },
-                        "required": ["city_id"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "discover_employees",
-                    "description": "Search for employee email addresses from a given domain (e.g., '@example.com') and save them as person leads linked to the organization lead ID.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "domain": {"type": "string"},
-                            "org_lead_id": {"type": "integer"}
-                        },
-                        "required": ["domain", "org_lead_id"]
-                    }
-                }
-            }
-        ]
 
     def start(self):
         self._paused = False
@@ -267,11 +135,45 @@ class LeadAgent(QObject):
     #         domain = domain.split('/')[0]
     #         return domain
 
+    def _generate_and_store_plan(self, city_id, city_name):
+        """Generate a list of 20-30 search queries for the given city and store in DB."""
+        self._ensure_groq_client()
+        if self.groq_client is None:
+            return []
+        
+        user_msg = f"City: {city_name}, Italy."
+        try:
+            response = self.groq_client.chat.completions.create(
+                model="llama-3.1-70b-versatile",
+                messages=[
+                    {"role": "system", "content": PLANNER_PROMPT},
+                    {"role": "user", "content": user_msg}
+                ],
+                max_tokens=1000,
+                temperature=0.8
+            )
+            content = response.choices[0].message.content
+            queries = json.loads(content)
+            if not isinstance(queries, list):
+                self.status_updated.emit("Invalid plan format: not a list")
+                return []
+        except Exception as e:
+            self.status_updated.emit(f"Error generating plan: {e}")
+            return []
+        
+        # Store plan in database
+        conn = sqlite3.connect(database.DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE cities SET plan = ? WHERE id = ?", (json.dumps(queries), city_id))
+        conn.commit()
+        conn.close()
+        return queries
+
     def run(self):
         self.status_updated.emit("Agent started.")
         conn = sqlite3.connect(database.DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("SELECT id, name, region FROM cities WHERE status = 'pending' ORDER BY id")
+        cursor.execute("SELECT id, name, region, plan FROM cities WHERE status = 'pending' ORDER BY id")
         rows = cursor.fetchall()
         conn.close()
 
@@ -284,76 +186,64 @@ class LeadAgent(QObject):
             if self._stopped:
                 break
             self.wait_if_paused()
-            city_id, city_name, region = city_row
+            city_id, city_name, region, plan_json = city_row
             self.status_updated.emit(f"Processing city: {city_name}")
-            self.progress_updated.emit(city_name, 0, 0)
-
-            messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"Current city: {city_name} (ID: {city_id}). Find leather-related business leads. Start by checking if we already have keywords or search queries for this city, then proceed."}
-            ]
-
-            turn_counter = 0
-            max_turns = 30
-
-            while True:
+            
+            # Parse existing plan or generate new one
+            queries = []
+            if plan_json:
+                try:
+                    queries = json.loads(plan_json)
+                    if not isinstance(queries, list):
+                        queries = []
+                except json.JSONDecodeError:
+                    queries = []
+            
+            if not queries:
+                self.status_updated.emit("Generating search plan...")
+                queries = self._generate_and_store_plan(city_id, city_name)
+                if not queries:
+                    self.status_updated.emit("No queries generated, marking city done.")
+                    self._mark_city_done(city_id)
+                    continue
+            
+            # Execute each query deterministically
+            for query in queries:
                 if self._stopped:
                     break
                 self.wait_if_paused()
-
-                turn_counter += 1
-                if turn_counter > max_turns:
-                    self.status_updated.emit("Max turns reached for city, moving on.")
-                    break
-
-                try:
-                    response = self._groq_chat(messages)
-                except (IndexError, KeyError, AttributeError) as e:
-                    self.status_updated.emit(f"Invalid response from Groq: {str(e)}")
-                    break
-                if response is None:
-                    break
-
-                try:
-                    message = response.choices[0].message
-                except Exception as e:
-                    self.status_updated.emit(f"Error accessing response message: {str(e)}")
-                    break
-
-                if message.content:
-                    truncated_content = message.content[:80] + "..." if len(message.content) > 80 else message.content
-                    self.status_updated.emit(f"Groq: {truncated_content}")
-
-                if message.tool_calls:
-                    assistant_message = {
-                        "role": "assistant",
-                        "content": message.content,
-                        "tool_calls": []
-                    }
-                    for tc in message.tool_calls:
-                        assistant_message["tool_calls"].append({
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments
-                            }
-                        })
-                    messages.append(assistant_message)
-
-                    for tool_call in message.tool_calls:
-                        result_str = self._execute_tool_call(tool_call)
-                        self.status_updated.emit(f"Tool {tool_call.function.name} executed.")
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "content": result_str
-                        })
-                else:
-                    messages.append({"role": "user", "content": "What is your next action? Please use a tool."})
-
+                self.status_updated.emit(f"Searching: {query}")
+                results = self.search_web(query)
+                
+                # Process first 5 results per query
+                for result in results[:5]:
+                    if self._stopped:
+                        break
+                    self.wait_if_paused()
+                    contacts = self.extract_contacts_from_page(result['url'])
+                    if contacts.get('emails') or contacts.get('phones'):
+                        business_name = result.get('title', '')
+                        website = result.get('url', '')
+                        lead_id = self._save_organization_lead(
+                            city=city_name,
+                            business_name=business_name,
+                            website=website,
+                            emails=contacts.get('emails', []),
+                            phones=contacts.get('phones', [])
+                        )
+                        # Discover employees if we have a domain
+                        if lead_id and website:
+                            domain = self._extract_domain(website)
+                            if domain:
+                                self._discover_employees(domain, lead_id)
+                    time.sleep(random.uniform(1, 3))
+                
+                time.sleep(2)  # Between queries
+            
+            # Mark city done
             self._mark_city_done(city_id)
-
+            
+            # Emit progress
             conn = sqlite3.connect(database.DB_PATH)
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM leads WHERE city = ?", (city_name,))
@@ -363,7 +253,6 @@ class LeadAgent(QObject):
             total_row = cursor.fetchone()
             total_leads = total_row[0] if total_row else 0
             conn.close()
-
             self.progress_updated.emit(city_name, leads_count_for_city, total_leads)
 
         if not self._stopped:
@@ -423,23 +312,24 @@ class LeadAgent(QObject):
             self.groq_client = None
             return
 
-    def _groq_chat(self, messages):
-        self._ensure_groq_client()
-        if self.groq_client is None:
-            return None
-        try:
-            response = self.groq_client.chat.completions.create(
-                model="llama-3.1-70b-versatile",
-                messages=messages,
-                tools=(self.TOOLS if len(self.TOOLS) > 0 else None),
-                tool_choice="auto",
-                max_tokens=1000,
-                temperature=0.7
-            )
-            return response
-        except Exception as e:
-            self.status_updated.emit(f"Groq API error: {str(e)}")
-            return None
+    # UNUSED METHOD - commented out as per cleanup
+    # def _groq_chat(self, messages):
+    #     self._ensure_groq_client()
+    #     if self.groq_client is None:
+    #         return None
+    #     try:
+    #         response = self.groq_client.chat.completions.create(
+    #             model="llama-3.1-70b-versatile",
+    #             messages=messages,
+    #             tools=(self.TOOLS if len(self.TOOLS) > 0 else None),
+    #             tool_choice="auto",
+    #             max_tokens=1000,
+    #             temperature=0.7
+    #         )
+    #         return response
+    #     except Exception as e:
+    #         self.status_updated.emit(f"Groq API error: {str(e)}")
+    #         return None
 
     # UNUSED METHOD - commented out as per cleanup
     # def generate_keywords_for_city(self, city_name):
@@ -604,84 +494,6 @@ class LeadAgent(QObject):
             conn.close()
         time.sleep(2)
 
-    def _execute_query(self, sql):
-        """Execute a read-only SELECT query and return results as JSON."""
-        if not sql.strip().upper().startswith("SELECT"):
-            return json.dumps({"error": "Only SELECT queries are allowed"})
-        conn = sqlite3.connect(database.DB_PATH)
-        cursor = conn.cursor()
-        try:
-            cursor.execute(sql)
-            rows = cursor.fetchall()
-            return json.dumps([list(row) for row in rows])
-        except Exception as e:
-            return json.dumps({"error": str(e)})
-        finally:
-            conn.close()
 
-    def _save_lead_from_agent(self, args):
-        """Save a lead based on record_type from agent tool call arguments."""
-        record_type = args.get("record_type")
-        if record_type == "PERSON":
-            org_lead_id = args.get("parent_org_id")
-            email = args.get("email")
-            domain = args.get("domain", "")
-            person_full_name = args.get("person_full_name")
-            role = args.get("role")
-            linkedin_url = args.get("linkedin_url")
-            result = self._save_person_lead(org_lead_id, email, domain, person_full_name, role, linkedin_url)
-            if result:
-                return f"Lead saved with ID {result}"
-            else:
-                return "Duplicate, lead already exists"
-        elif record_type == "ORGANIZATION":
-            city = args["city"]
-            business_name = args.get("business_name", "")
-            website = args.get("website", "")
-            emails = [args["email"]] if args.get("email") else []
-            phones = [args["phone"]] if args.get("phone") else []
-            lead_score = args.get("lead_score", 70)
-            role = args.get("role")
-            linkedin_url = args.get("linkedin_url")
-            lead_id = self._save_organization_lead(city, business_name, website, emails, phones, lead_score, role, linkedin_url)
-            if lead_id:
-                return f"Lead saved with ID {lead_id}"
-            else:
-                return "Duplicate, lead already exists"
-        else:
-            return "Invalid record_type"
-
-    def _execute_tool_call(self, tool_call):
-        """Execute a tool call returned by Groq and return the result as a string."""
-        try:
-            func_name = tool_call.function.name
-            args = json.loads(tool_call.function.arguments)
-            
-            if func_name == "search_web":
-                results = self.search_web(query=args["query"], max_results=args.get("max_results", 10))
-                return json.dumps(results)
-            elif func_name == "fetch_url":
-                html = self.fetch_url(url=args["url"])
-                if html is None:
-                    return ""
-                return html[:8000]
-            elif func_name == "extract_contacts_from_page":
-                result = self.extract_contacts_from_page(url=args["url"])
-                return json.dumps(result)
-            elif func_name == "query_db":
-                result = self._execute_query(args["sql"])
-                return result
-            elif func_name == "save_lead":
-                result = self._save_lead_from_agent(args)
-                return result
-            elif func_name == "mark_city_done":
-                self._mark_city_done(city_id=args["city_id"])
-                return "City marked done"
-            elif func_name == "discover_employees":
-                self._discover_employees(domain=args["domain"], org_lead_id=args["org_lead_id"])
-                return "Employee discovery complete"
-            else:
-                return f"Unknown tool: {func_name}"
-        except Exception as e:
-            self.status_updated.emit(f"Tool error: {str(e)}")
-            return f"Error: {str(e)}"
+if __name__ == "__main__":
+    pass
