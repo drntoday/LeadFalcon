@@ -3,7 +3,7 @@ import sqlite3
 import json
 import os
 from openpyxl import Workbook
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QTableWidget, QDialog, QFormLayout, QDialogButtonBox, QTableWidgetItem, QFileDialog, QPushButton, QLineEdit
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QTableWidget, QDialog, QFormLayout, QDialogButtonBox, QTableWidgetItem, QFileDialog, QPushButton, QLineEdit, QComboBox, QCheckBox
 from PySide6.QtGui import QAction
 from PySide6.QtCore import QThread
 
@@ -14,7 +14,7 @@ SETTINGS_FILE = "settings.json"
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, current_settings=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
         
@@ -29,13 +29,26 @@ class SettingsDialog(QDialog):
         self.groq_key_edit = QLineEdit()
         self.groq_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.groq_key_edit.setObjectName("groq_key")
+        if current_settings and "groq_key" in current_settings:
+            self.groq_key_edit.setText(current_settings["groq_key"])
         form_layout.addRow("Groq API Key", self.groq_key_edit)
         
         # Scraping Speed
-        self.speed_edit = QLineEdit()
-        self.speed_edit.setText("Polite")
-        self.speed_edit.setObjectName("speed")
-        form_layout.addRow("Scraping Speed", self.speed_edit)
+        self.speed_combo = QComboBox()
+        self.speed_combo.addItems(["Polite", "Aggressive"])
+        self.speed_combo.setObjectName("speed")
+        if current_settings and "speed" in current_settings:
+            idx = self.speed_combo.findText(current_settings["speed"])
+            if idx >= 0:
+                self.speed_combo.setCurrentIndex(idx)
+        form_layout.addRow("Scraping Speed", self.speed_combo)
+        
+        # Auto-start checkbox
+        self.auto_start_check = QCheckBox("Auto-start scraping on launch")
+        self.auto_start_check.setObjectName("auto_start")
+        if current_settings and current_settings.get("auto_start", False):
+            self.auto_start_check.setChecked(True)
+        form_layout.addRow("", self.auto_start_check)
         
         # Add form layout to main layout
         main_layout.addLayout(form_layout)
@@ -49,7 +62,8 @@ class SettingsDialog(QDialog):
     def on_accepted(self):
         self.settings = {
             "groq_key": self.groq_key_edit.text(),
-            "speed": self.speed_edit.text()
+            "speed": self.speed_combo.currentText(),
+            "auto_start": self.auto_start_check.isChecked()
         }
         self.accept()
 
@@ -138,6 +152,10 @@ class MainWindow(QMainWindow):
         
         # Load existing leads from database on startup
         self.load_leads()
+        
+        # Auto-start scraping if enabled in settings
+        if self.app_settings.get("auto_start", False):
+            self.on_start()
     
     def load_leads(self):
         """Load existing leads from the database and display them in the table."""
@@ -224,11 +242,13 @@ class MainWindow(QMainWindow):
         print("Agent finished")
     
     def on_settings(self):
-        self.settings_dialog = SettingsDialog(self)
+        self.settings_dialog = SettingsDialog(self, self.app_settings)
         if self.settings_dialog.exec() == QDialog.Accepted:
             self.app_settings = self.settings_dialog.settings
             with open(SETTINGS_FILE, 'w') as f:
                 json.dump(self.app_settings, f)
+            # Update agent settings
+            self.agent.settings = self.app_settings
     
     def on_export(self):
         path, _ = QFileDialog.getSaveFileName(self, "Export Leads", "", "Excel Files (*.xlsx)")
