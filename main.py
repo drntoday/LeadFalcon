@@ -1,7 +1,8 @@
 import sys
 import sqlite3
 import json
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSpinBox, QLineEdit, QTableWidget, QDialog, QFormLayout, QTextEdit, QDialogButtonBox, QTableWidgetItem
+from openpyxl import Workbook
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSpinBox, QLineEdit, QTableWidget, QDialog, QFormLayout, QTextEdit, QDialogButtonBox, QTableWidgetItem, QFileDialog
 from PySide6.QtGui import QAction
 from PySide6.QtCore import QThread
 
@@ -241,7 +242,27 @@ class MainWindow(QMainWindow):
                 json.dump(self.app_settings, f)
     
     def on_export(self):
-        print("Export")
+        path, _ = QFileDialog.getSaveFileName(self, "Export Leads", "", "Excel Files (*.xlsx)")
+        if not path:
+            return
+        try:
+            wb = Workbook()
+            ws = wb.active
+            # Write headers
+            for col in range(self.leads_table.columnCount()):
+                header_item = self.leads_table.horizontalHeaderItem(col)
+                header_text = header_item.text() if header_item else ""
+                ws.cell(row=1, column=col + 1, value=header_text)
+            # Write data rows
+            for row in range(self.leads_table.rowCount()):
+                for col in range(self.leads_table.columnCount()):
+                    item = self.leads_table.item(row, col)
+                    cell_value = item.text() if item else ""
+                    ws.cell(row=row + 2, column=col + 1, value=cell_value)
+            wb.save(path)
+            self.statusBar().showMessage(f"Exported to {path}")
+        except Exception as e:
+            self.statusBar().showMessage(f"Export failed: {str(e)}")
 
 
 if __name__ == "__main__":
