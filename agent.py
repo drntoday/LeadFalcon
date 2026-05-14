@@ -6,6 +6,9 @@ from PySide6.QtCore import QObject, Signal, Slot, QThread
 from duckduckgo_search import DDGS
 from curl_cffi import requests
 import random
+import re
+from email_validator import validate_email, EmailNotValidError
+import phonenumbers
 import database
 
 
@@ -200,3 +203,31 @@ class LeadAgent(QObject):
         finally:
             if conn:
                 conn.close()
+
+    def extract_contacts_from_text(self, text):
+        emails = set()
+        phones = set()
+        
+        # Find all email addresses using regex
+        email_pattern = r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}'
+        found_emails = re.findall(email_pattern, text)
+        
+        for email in found_emails:
+            try:
+                valid = validate_email(email)
+                emails.add(valid.email)
+            except EmailNotValidError:
+                pass
+        
+        # Find all Italian phone numbers
+        for match in phonenumbers.PhoneNumberMatcher(text, "IT"):
+            formatted = phonenumbers.format_number(match.number, phonenumbers.PhoneNumberFormat.E164)
+            phones.add(formatted)
+        
+        return {"emails": list(emails), "phones": list(phones)}
+
+    def extract_contacts_from_page(self, url):
+        html = self.fetch_url(url)
+        if html is None:
+            return {"emails": [], "phones": []}
+        return self.extract_contacts_from_text(html)
