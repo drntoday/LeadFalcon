@@ -4,6 +4,8 @@ import hashlib
 import groq
 from PySide6.QtCore import QObject, Signal, Slot, QThread
 from duckduckgo_search import DDGS
+from curl_cffi import requests
+import random
 import database
 
 
@@ -91,6 +93,21 @@ class LeadAgent(QObject):
             return []
         time.sleep(2)
         return results
+
+    def fetch_url(self, url):
+        self.status_updated.emit(f"Fetching: {url}")
+        try:
+            response = requests.get(url, impersonate="chrome", timeout=10)
+            if response.status_code == 200:
+                return response.text
+            else:
+                self.status_updated.emit(f"Warning: Received status code {response.status_code}")
+                return None
+        except Exception as e:
+            self.status_updated.emit(f"Error fetching URL: {e}")
+            return None
+        finally:
+            time.sleep(random.uniform(1, 3))
 
     def wait_if_paused(self):
         while self._paused and not self._stopped:
