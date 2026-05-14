@@ -28,6 +28,136 @@ class LeadAgent(QObject):
         self._stopped = False
         self.settings = settings if settings is not None else {}
         self.groq_client = None
+        self._register_tools()
+
+    def _register_tools(self):
+        self.TOOLS = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_web",
+                    "description": "Search the web for the given query and return a list of results with title, url, snippet.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string"},
+                            "max_results": {"type": "integer", "default": 10}
+                        },
+                        "required": ["query"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "fetch_url",
+                    "description": "Fetch the full HTML text of a given URL. Use this to extract contact details.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "url": {"type": "string"}
+                        },
+                        "required": ["url"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "extract_contacts_from_page",
+                    "description": "Fetch a URL and extract emails and phone numbers found on it. Returns a dictionary with 'emails' and 'phones' lists.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "url": {"type": "string"}
+                        },
+                        "required": ["url"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "query_db",
+                    "description": "Execute a read-only SQL query on the local database and return results as JSON. Use this to check for duplicates or retrieve existing data.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "sql": {"type": "string"}
+                        },
+                        "required": ["sql"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "save_lead",
+                    "description": "Save a new lead (organization or person) to the database. Provide all available details. The method will deduplicate automatically. Returns success status.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "record_type": {"type": "string", "enum": ["ORGANIZATION", "PERSON"]},
+                            "business_name": {"type": "string"},
+                            "person_full_name": {"type": "string"},
+                            "role": {"type": "string"},
+                            "email": {"type": "string"},
+                            "phone": {"type": "string"},
+                            "website": {"type": "string"},
+                            "linkedin_url": {"type": "string"},
+                            "city": {"type": "string"},
+                            "lead_score": {"type": "integer", "minimum": 0, "maximum": 100},
+                            "parent_org_id": {"type": "integer"}
+                        },
+                        "required": ["record_type", "city", "lead_score"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "google_places_search",
+                    "description": "Search Google Places for businesses matching a keyword in a city. Returns structured business data (name, address, phone, website).",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "city": {"type": "string"},
+                            "keyword": {"type": "string", "default": "pelletteria"}
+                        },
+                        "required": ["city"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "mark_city_done",
+                    "description": "Mark a city as completed in the database.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "city_id": {"type": "integer"}
+                        },
+                        "required": ["city_id"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "discover_employees",
+                    "description": "Search for employee email addresses from a given domain (e.g., '@example.com') and save them as person leads linked to the organization lead ID.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "domain": {"type": "string"},
+                            "org_lead_id": {"type": "integer"}
+                        },
+                        "required": ["domain", "org_lead_id"]
+                    }
+                }
+            }
+        ]
 
     def start(self):
         self._paused = False
