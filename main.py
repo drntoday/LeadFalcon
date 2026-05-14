@@ -79,6 +79,12 @@ class SettingsDialog(QDialog):
             "groq_key": self.groq_key_edit.text(),
             "auto_start": self.auto_start_check.isChecked()
         }
+        # Save settings immediately to file
+        try:
+            with open(SETTINGS_FILE, 'w') as f:
+                json.dump(self.settings, f)
+        except Exception as e:
+            pass
         self.accept()
 
 
@@ -294,6 +300,9 @@ class MainWindow(QMainWindow):
                 json.dump(self.app_settings, f)
             # Update agent settings
             self.agent.settings = self.app_settings
+            # Reload auto_start setting in case it changed
+            if hasattr(self, 'load_thread') and hasattr(self, 'municipality_loader'):
+                pass  # Already handled by file save in dialog
     
     def on_export(self):
         # Check if there are any leads to export
