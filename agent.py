@@ -27,10 +27,10 @@ You have access to tools:
 - discover_employees: search for employee email addresses from an organization's domain and save them.
 
 Strategy:
-1. Start by searching the web with multiple Italian phrases combined with the city name, e.g., "pelletteria Roma Pagine Gialle", "borse pelle Milano contatti", "negozi accessori moda Torino telefono".
+1. Start by searching the web with multiple Italian phrases combined with the city name, e.g., "pelletteria Roma Pagine Gialle", "borse pelle Milano contatti", "negozi accessori moda Torino telefono". Use these searches to find Italian business directories like Pagine Gialle, Yelp Italia, or local chamber of commerce listings.
 2. For promising URLs from search results, use extract_contacts_from_page to quickly get contacts. If a page has no contact info, skip it.
 3. If you find a business website, save the organization lead with a score based on confidence (70-90). Then use discover_employees on its domain.
-4. Prioritize extracting phone numbers and emails from Italian public directories and business listings.
+4. Prioritize extracting phone numbers and emails from Italian public directories and business listings. Focus on getting structured data from directory snippets and full page fetches.
 5. Always check for duplicates via query_db before saving. 
 6. If a city yields very few results, try broader queries (e.g., "negozi abbigliamento {city}").
 7. When you have tried multiple angles and found all reasonable leads, call mark_city_done.
@@ -558,27 +558,6 @@ class LeadAgent(QObject):
         if html is None:
             return {"emails": [], "phones": []}
         return self.extract_contacts_from_text(html)
-
-    # UNUSED METHOD - commented out as per cleanup
-    # def _process_google_places(self, city_name):
-    #         places = self.search_google_places(city_name)
-    #         for place in places:
-    #             if self._stopped:
-    #                 break
-    #             self.wait_if_paused()
-    #             org_lead_id = self._save_organization_lead(
-    #                 city_name,
-    #                 place["name"],
-    #                 place["website"],
-    #                 emails=[],
-    #                 phones=[place["phone"]]
-    #             )
-    #             if org_lead_id is not None and place["website"]:
-    #                 domain = self._extract_domain(place["website"])
-    #                 if domain:
-    #                     self._discover_employees(domain, org_lead_id)
-    #             time.sleep(1)
-    #
 
 
     def _save_person_lead(self, org_lead_id, email, domain, person_full_name=None, role=None, linkedin_url=None):
