@@ -1,10 +1,12 @@
 import sys
 import sqlite3
 import json
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSpinBox, QLineEdit, QTableWidget, QDialog, QFormLayout, QTextEdit, QDialogButtonBox
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSpinBox, QLineEdit, QTableWidget, QDialog, QFormLayout, QTextEdit, QDialogButtonBox, QTableWidgetItem
 from PySide6.QtGui import QAction
+from PySide6.QtCore import QThread
 
 import database
+from agent import LeadAgent
 
 SETTINGS_FILE = "settings.json"
 
@@ -165,15 +167,67 @@ class MainWindow(QMainWindow):
         
         # Add a status bar with "Ready" message
         self.statusBar().showMessage("Ready")
+        
+        # Create agent thread and agent
+        self.agent_thread = QThread()
+        self.agent = LeadAgent()
+        self.agent.moveToThread(self.agent_thread)
+        
+        # Connect signals
+        self.agent_thread.started.connect(self.agent.run)
+        self.agent.finished.connect(self.agent_thread.quit)
+        self.agent.finished.connect(self.on_agent_finished)
+        self.agent_thread.finished.connect(self.agent_thread.deleteLater)
+        self.agent.status_updated.connect(lambda msg: self.statusBar().showMessage(msg))
+        self.agent.lead_found.connect(self.on_lead_found)
+    
+    def closeEvent(self, event):
+        if hasattr(self, 'agent') and hasattr(self, 'agent_thread'):
+            self.agent.stop()
+            self.agent_thread.quit()
+            self.agent_thread.wait()
+        event.accept()
     
     def on_start(self):
-        print("Start")
+        if not self.agent_thread.isRunning():
+            self.agent.start()
+            self.agent_thread.start()
     
     def on_pause(self):
-        print("Pause")
+        if self.agent_thread.isRunning():
+            self.agent.pause()
     
     def on_stop(self):
-        print("Stop")
+        self.agent.stop()
+        self.agent_thread.quit()
+        self.agent_thread.wait()
+    
+    def on_lead_found(self, lead_dict):
+        row = self.leads_table.rowCount()
+        self.leads_table.insertRow(row)
+        
+        record_type = lead_dict.get('record_type', '')
+        business_name = lead_dict.get('business_name', '')
+        person_full_name = lead_dict.get('person_full_name', '')
+        role = lead_dict.get('role', '')
+        email = lead_dict.get('email', '')
+        phone = lead_dict.get('phone', '')
+        lead_score = lead_dict.get('lead_score', '')
+        
+        business_or_person = business_name if business_name else person_full_name
+        
+        self.leads_table.setItem(row, 0, QTableWidgetItem(str(record_type)))
+        self.leads_table.setItem(row, 1, QTableWidgetItem(str(business_or_person)))
+        self.leads_table.setItem(row, 2, QTableWidgetItem(str(role)))
+        self.leads_table.setItem(row, 3, QTableWidgetItem(str(email)))
+        self.leads_table.setItem(row, 4, QTableWidgetItem(str(phone)))
+        self.leads_table.setItem(row, 5, QTableWidgetItem(str(lead_score)))
+        
+        self.leads_table.scrollToBottom()
+    
+    def on_agent_finished(self):
+        self.statusBar().showMessage("Finished")
+        print("Agent finished")
     
     def on_settings(self):
         self.settings_dialog = SettingsDialog(self)
