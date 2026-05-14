@@ -3,9 +3,9 @@ import sqlite3
 import json
 import os
 from openpyxl import Workbook
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QTableWidget, QDialog, QFormLayout, QDialogButtonBox, QTableWidgetItem, QFileDialog, QPushButton, QLineEdit, QComboBox, QCheckBox
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QTableWidget, QDialog, QFormLayout, QDialogButtonBox, QTableWidgetItem, QFileDialog, QPushButton, QLineEdit, QComboBox, QCheckBox
 from PySide6.QtGui import QAction
-from PySide6.QtCore import QThread
+from PySide6.QtCore import QThread, QTimer
 
 import database
 from agent import LeadAgent
@@ -155,7 +155,7 @@ class MainWindow(QMainWindow):
         
         # Auto-start scraping if enabled in settings
         if self.app_settings.get("auto_start", False):
-            self.on_start()
+            QTimer.singleShot(0, self.on_start)
     
     def load_leads(self):
         """Load existing leads from the database and display them in the table."""
