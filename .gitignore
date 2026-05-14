@@ -1,1 +1,17 @@
-Nothing should be ignored since only source files (.py) are in the changes.
+```gitignore
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+
+# Environment
+.env
+.env.local
+*.env.*
+```

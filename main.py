@@ -173,6 +173,10 @@ class MainWindow(QMainWindow):
             if self.app_settings.get("auto_start", False):
                 QTimer.singleShot(0, self.on_start)
         
+        # Connect to municipality loader finished signal to check auto_start after loading
+        if hasattr(self, 'municipality_loader'):
+            self.municipality_loader.finished.connect(self._check_auto_start_after_load)
+        
         # Create agent thread and agent
         self.agent_thread = QThread()
         self.agent = LeadAgent(settings=self.app_settings)
@@ -258,6 +262,11 @@ class MainWindow(QMainWindow):
         """Slot for when municipality loading is complete."""
         self.statusBar().showMessage(f"{new_rows} municipalities loaded.")
         # If auto-start is enabled, trigger agent start after loading completes
+        if self.app_settings.get("auto_start", False) and not self.agent_thread.isRunning():
+            QTimer.singleShot(500, self.on_start)
+    
+    def _check_auto_start_after_load(self, new_rows):
+        """Check auto_start setting after municipality loading finishes."""
         if self.app_settings.get("auto_start", False) and not self.agent_thread.isRunning():
             QTimer.singleShot(500, self.on_start)
     
