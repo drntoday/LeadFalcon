@@ -1,0 +1,7 @@
+PySide6
+groq
+duckduckgo_search
+curl_cffi
+email-validator
+phonenumbers
+openpyxl
