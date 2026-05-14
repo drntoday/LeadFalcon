@@ -66,6 +66,7 @@ class LeadAgent(QObject):
                 if query_id is None:
                     continue
                 results = self.search_web(keyword)
+                self._store_search_results(query_id, results)
                 print(len(results))
 
         if not self._stopped:
@@ -162,6 +163,23 @@ class LeadAgent(QObject):
         except Exception as e:
             self.status_updated.emit(f"Search query error: {e}")
             return None
+        finally:
+            if conn:
+                conn.close()
+
+    def _store_search_results(self, query_id, results):
+        conn = None
+        try:
+            conn = sqlite3.connect(database.DB_PATH)
+            cursor = conn.cursor()
+            for result in results:
+                cursor.execute(
+                    "INSERT OR IGNORE INTO search_results (query_id, url, title, snippet) VALUES (?, ?, ?, ?)",
+                    (query_id, result.get("url", ""), result.get("title", ""), result.get("snippet", ""))
+                )
+            conn.commit()
+        except Exception as e:
+            self.status_updated.emit(f"Failed to store search results: {e}")
         finally:
             if conn:
                 conn.close()
