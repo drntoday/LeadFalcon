@@ -8,6 +8,22 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "leadfalcon.db")
 CSV_URL = "https://raw.githubusercontent.com/MatteoRagni/Italian-Comuni-List/master/comuni.csv"
 
 
+def _download_csv(path):
+    """Download the CSV from CSV_URL and write it to path.
+    
+    Args:
+        path: Path to write the downloaded CSV file.
+        
+    Raises:
+        Exception: If the download fails.
+    """
+    response = curl_cffi.requests.get(CSV_URL)
+    if response.status_code != 200:
+        raise Exception(f"Failed to download CSV: HTTP {response.status_code}")
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(response.text)
+
+
 def import_comuni_from_csv(csv_path, progress_callback=None):
     """Import Italian municipalities from a CSV file into the cities table.
     
@@ -24,14 +40,22 @@ def import_comuni_from_csv(csv_path, progress_callback=None):
     """
     # Check if file exists, if not download it
     if not os.path.exists(csv_path):
+        _download_csv(csv_path)
+    else:
+        # Check if file is a placeholder (less than 1000 rows)
+        needs_download = False
         try:
-            response = curl_cffi.requests.get(CSV_URL)
-            if response.status_code != 200:
-                raise FileNotFoundError(f"Failed to download CSV: HTTP {response.status_code}")
-            with open(csv_path, 'w', encoding='utf-8') as f:
-                f.write(response.text)
-        except Exception as e:
-            raise FileNotFoundError(f"Could not download or access CSV file: {e}")
+            with open(csv_path, 'r', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                next(reader, None)  # Skip header
+                row_count = sum(1 for _ in reader)
+                if row_count < 1000:
+                    needs_download = True
+        except Exception:
+            needs_download = True
+        
+        if needs_download:
+            _download_csv(csv_path)
     
     try:
         conn = sqlite3.connect(DB_PATH)
