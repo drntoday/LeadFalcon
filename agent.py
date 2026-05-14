@@ -1,5 +1,7 @@
 import time
+import sqlite3
 from PySide6.QtCore import QObject, Signal, Slot, QThread
+import database
 
 
 class LeadAgent(QObject):
@@ -32,9 +34,29 @@ class LeadAgent(QObject):
         self.status_updated.emit("Stopped.")
 
     def run(self):
-        print("Agent running...")
-        time.sleep(2)
-        self.finished.emit()
+        self.status_updated.emit("Connecting to database...")
+        conn = sqlite3.connect(database.DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name, region FROM cities WHERE status = 'pending'")
+        rows = cursor.fetchall()
+        conn.close()
+
+        if not rows:
+            self.status_updated.emit("No pending cities.")
+            self.finished.emit()
+            return
+
+        for city in rows:
+            if self._stopped:
+                break
+            self.wait_if_paused()
+            city_id, city_name, region = city
+            self.status_updated.emit(f"Processing {city_name}...")
+            time.sleep(1)
+
+        if not self._stopped:
+            self.status_updated.emit("All cities processed.")
+            self.finished.emit()
 
     def wait_if_paused(self):
         while self._paused and not self._stopped:
