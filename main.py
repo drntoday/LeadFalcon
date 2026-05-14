@@ -1,9 +1,12 @@
 import sys
 import sqlite3
+import json
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSpinBox, QLineEdit, QTableWidget, QDialog, QFormLayout, QTextEdit, QDialogButtonBox
 from PySide6.QtGui import QAction
 
 import database
+
+SETTINGS_FILE = "settings.json"
 
 
 class SettingsDialog(QDialog):
@@ -79,6 +82,13 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("LeadFalcon – Italian Leather Prospector")
         
+        # Load settings from file
+        try:
+            with open(SETTINGS_FILE, 'r') as f:
+                self.app_settings = json.load(f)
+        except FileNotFoundError:
+            self.app_settings = {}
+        
         # Create a toolbar at the top
         toolbar = self.addToolBar("Main Toolbar")
         
@@ -118,6 +128,10 @@ class MainWindow(QMainWindow):
         self.city_combo = QComboBox()
         self.city_combo.setObjectName("city_combo")
         filter_layout.addWidget(self.city_combo)
+        
+        # Populate city_combo from loaded settings if present
+        if 'cities' in self.app_settings:
+            self.city_combo.addItems(self.app_settings['cities'])
         
         # Min Score label and spin box
         score_label = QLabel("Min Score:")
@@ -169,6 +183,8 @@ class MainWindow(QMainWindow):
             self.city_combo.addItems(self.app_settings['cities'])
             if self.app_settings['cities']:
                 self.city_combo.setCurrentIndex(0)
+            with open(SETTINGS_FILE, 'w') as f:
+                json.dump(self.app_settings, f)
     
     def on_export(self):
         print("Export")
