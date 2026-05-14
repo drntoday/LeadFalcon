@@ -4,7 +4,7 @@ import json
 import os
 from datetime import datetime
 from openpyxl import Workbook
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QTableWidget, QDialog, QFormLayout, QDialogButtonBox, QTableWidgetItem, QFileDialog, QLineEdit, QLabel, QCheckBox
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QTableWidget, QDialog, QFormLayout, QDialogButtonBox, QTableWidgetItem, QFileDialog, QLineEdit, QLabel, QCheckBox, QMessageBox
 from PySide6.QtGui import QAction
 from PySide6.QtCore import QThread, QTimer, QObject, Signal
 
@@ -168,6 +168,7 @@ class MainWindow(QMainWindow):
             # Connect signals
             self.municipality_loader.progress.connect(self.on_load_progress)
             self.municipality_loader.finished.connect(self.on_load_finished)
+            self.municipality_loader.finished.connect(self._check_auto_start_after_load)
             self.load_thread.started.connect(self.municipality_loader.load)
             self.municipality_loader.finished.connect(self.load_thread.quit)
             self.load_thread.finished.connect(self.load_thread.deleteLater)
@@ -178,10 +179,6 @@ class MainWindow(QMainWindow):
             # Municipalities already loaded, check auto_start
             if self.app_settings.get("auto_start", False):
                 QTimer.singleShot(0, self.on_start)
-        
-        # Connect to municipality loader finished signal for auto-start check after loading
-        if hasattr(self, 'municipality_loader'):
-            self.municipality_loader.finished.connect(self._check_auto_start_after_load)
         
         # Create agent thread and agent
         self.agent_thread = QThread()
@@ -315,6 +312,7 @@ class MainWindow(QMainWindow):
     def on_export(self):
         # Check if there are any leads to export
         if self.leads_table.rowCount() == 0:
+            QMessageBox.warning(self, "No Leads", "No leads to export. Please run a search first.")
             self.statusBar().showMessage("No leads to export.")
             return
         
