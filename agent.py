@@ -10,10 +10,11 @@ class LeadAgent(QObject):
     progress_updated = Signal(str, int, int)
     finished = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, settings=None):
         super().__init__(parent)
         self._paused = False
         self._stopped = False
+        self.settings = settings if settings is not None else {}
 
     def start(self):
         self._paused = False

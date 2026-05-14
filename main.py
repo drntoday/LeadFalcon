@@ -170,7 +170,7 @@ class MainWindow(QMainWindow):
         
         # Create agent thread and agent
         self.agent_thread = QThread()
-        self.agent = LeadAgent()
+        self.agent = LeadAgent(settings=self.app_settings)
         self.agent.moveToThread(self.agent_thread)
         
         # Connect signals
