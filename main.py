@@ -1,5 +1,5 @@
 import sys
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSpinBox, QLineEdit
 from PySide6.QtGui import QAction
 
 
@@ -32,9 +32,43 @@ class MainWindow(QMainWindow):
         self.export_action.triggered.connect(self.on_export)
         toolbar.addAction(self.export_action)
         
-        # Create an empty central widget
+        # Create central widget with QVBoxLayout
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
+        layout = QVBoxLayout(central_widget)
+        
+        # Create horizontal layout for filter controls
+        filter_layout = QHBoxLayout()
+        
+        # City label and combo box
+        city_label = QLabel("City:")
+        filter_layout.addWidget(city_label)
+        
+        self.city_combo = QComboBox()
+        self.city_combo.setObjectName("city_combo")
+        filter_layout.addWidget(self.city_combo)
+        
+        # Min Score label and spin box
+        score_label = QLabel("Min Score:")
+        filter_layout.addWidget(score_label)
+        
+        self.score_spin = QSpinBox()
+        self.score_spin.setObjectName("score_spin")
+        self.score_spin.setRange(0, 100)
+        self.score_spin.setValue(50)
+        filter_layout.addWidget(self.score_spin)
+        
+        # Search label and line edit
+        search_label = QLabel("Search:")
+        filter_layout.addWidget(search_label)
+        
+        self.search_edit = QLineEdit()
+        self.search_edit.setObjectName("search_edit")
+        self.search_edit.setPlaceholderText("Search...")
+        filter_layout.addWidget(self.search_edit)
+        
+        # Add filter layout to main layout
+        layout.addLayout(filter_layout)
         
         # Add a status bar with "Ready" message
         self.statusBar().showMessage("Ready")
