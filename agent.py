@@ -51,6 +51,14 @@ class LeadAgent(QObject):
         conn.commit()
         conn.close()
 
+    def _mark_city_done(self, city_id):
+        conn = sqlite3.connect(database.DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE cities SET status = 'done' WHERE id = ?", (city_id,))
+        conn.commit()
+        conn.close()
+        self.status_updated.emit("City marked as done.")
+
     def _extract_domain(self, url):
         parsed = urlparse(url)
         netloc = parsed.netloc
@@ -171,6 +179,9 @@ class LeadAgent(QObject):
 
             # Process Google Places results for this city
             self._process_google_places(city_name)
+
+            # Mark the city as done after all processing is complete
+            self._mark_city_done(city_id)
 
         if not self._stopped:
             self.status_updated.emit("All cities processed.")
