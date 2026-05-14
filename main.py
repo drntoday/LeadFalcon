@@ -3,7 +3,7 @@ import sqlite3
 import json
 import os
 from openpyxl import Workbook
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QComboBox, QSpinBox, QLineEdit, QTableWidget, QDialog, QFormLayout, QDialogButtonBox, QTableWidgetItem, QFileDialog, QPushButton
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QTableWidget, QDialog, QFormLayout, QDialogButtonBox, QTableWidgetItem, QFileDialog, QPushButton, QLineEdit
 from PySide6.QtGui import QAction
 from PySide6.QtCore import QThread
 
@@ -31,12 +31,6 @@ class SettingsDialog(QDialog):
         self.groq_key_edit.setObjectName("groq_key")
         form_layout.addRow("Groq API Key", self.groq_key_edit)
         
-        # Scraping Speed
-        self.speed_combo = QComboBox()
-        self.speed_combo.addItems(["Polite", "Aggressive"])
-        self.speed_combo.setObjectName("speed_combo")
-        form_layout.addRow("Scraping Speed", self.speed_combo)
-        
         # Add form layout to main layout
         main_layout.addLayout(form_layout)
         
@@ -48,8 +42,7 @@ class SettingsDialog(QDialog):
     
     def on_accepted(self):
         self.settings = {
-            "groq_key": self.groq_key_edit.text(),
-            "speed": self.speed_combo.currentText()
+            "groq_key": self.groq_key_edit.text()
         }
         self.accept()
 
