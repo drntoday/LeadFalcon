@@ -43,6 +43,50 @@ class LeadAgent(QObject):
         self._paused = False
         self.status_updated.emit("Stopped.")
 
+    def _mark_search_result_extracted(self, result_id):
+        conn = sqlite3.connect(database.DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE search_results SET extracted = 1 WHERE id = ?", (result_id,))
+        conn.commit()
+        conn.close()
+
+    def _save_organization_lead(self, city, business_name, website, emails, phones):
+        conn = sqlite3.connect(database.DB_PATH)
+        cursor = conn.cursor()
+        email = emails[0] if emails else None
+        phone = phones[0] if phones else None
+        try:
+            cursor.execute(
+                "INSERT OR IGNORE INTO leads (record_type, business_name, email, phone, website, city, lead_score) VALUES ('ORGANIZATION', ?, ?, ?, ?, ?, 70)",
+                (business_name, email, phone, website, city)
+            )
+            if cursor.rowcount > 0:
+                self.lead_found.emit({
+                    'record_type': 'ORGANIZATION',
+                    'business_name': business_name,
+                    'role': '',
+                    'email': email,
+                    'phone': phone,
+                    'lead_score': 70,
+                    'source_urls': website
+                })
+        finally:
+            conn.commit()
+            conn.close()
+
+    def _guess_business_name(self, title, url):
+        if title:
+            for sep in [' - ', ' | ', ' – ']:
+                if sep in title:
+                    return title.split(sep)[0].strip()
+            return title.strip()
+        # Extract domain from URL
+        domain = url
+        domain = re.sub(r'^https?://', '', domain)
+        domain = re.sub(r'^www\.', '', domain)
+        domain = domain.split('/')[0]
+        return domain
+
     def run(self):
         self.status_updated.emit("Connecting to database...")
         conn = sqlite3.connect(database.DB_PATH)
@@ -72,6 +116,26 @@ class LeadAgent(QObject):
                     continue
                 results = self.search_web(keyword)
                 self._store_search_results(query_id, results)
+                
+                # Fetch unextracted search results for this query
+                conn = sqlite3.connect(database.DB_PATH)
+                cursor = conn.cursor()
+                cursor.execute("SELECT id, url, title FROM search_results WHERE query_id = ? AND extracted = 0", (query_id,))
+                unextracted = cursor.fetchall()
+                conn.close()
+                
+                for result_id, url, title in unextracted:
+                    if self._stopped:
+                        break
+                    self.wait_if_paused()
+                    self.status_updated.emit(f"Extracting contacts from: {url}")
+                    contacts = self.extract_contacts_from_page(url)
+                    if contacts.get('emails', []) or contacts.get('phones', []):
+                        business_name = self._guess_business_name(title, url)
+                        self._save_organization_lead(city_name, business_name, url, contacts.get('emails', []), contacts.get('phones', []))
+                    self._mark_search_result_extracted(result_id)
+                    time.sleep(1)
+                
                 print(len(results))
 
         if not self._stopped:
