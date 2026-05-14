@@ -119,3 +119,24 @@ class LeadAgent(QObject):
         except Exception:
             self.status_updated.emit("Failed to parse keyword response.")
             return []
+
+    def _get_or_create_keyword(self, city_id, keyword_text):
+        keyword_hash = hashlib.sha256(f"{city_id}{keyword_text}".encode()).hexdigest()
+        conn = None
+        try:
+            conn = sqlite3.connect(database.DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM keywords WHERE keyword_hash = ?", (keyword_hash,))
+            row = cursor.fetchone()
+            if row:
+                return row[0]
+            cursor.execute("INSERT INTO keywords (city_id, keyword_hash, keyword_text) VALUES (?, ?, ?)",
+                           (city_id, keyword_hash, keyword_text))
+            conn.commit()
+            return cursor.lastrowid
+        except Exception as e:
+            self.status_updated.emit(f"Keyword error: {e}")
+            return None
+        finally:
+            if conn:
+                conn.close()
