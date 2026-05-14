@@ -65,12 +65,14 @@ class LeadAgent(QObject):
         cursor = conn.cursor()
         email = emails[0] if emails else None
         phone = phones[0] if phones else None
+        lead_id = None
         try:
             cursor.execute(
                 "INSERT OR IGNORE INTO leads (record_type, business_name, email, phone, website, city, lead_score) VALUES ('ORGANIZATION', ?, ?, ?, ?, ?, 70)",
                 (business_name, email, phone, website, city)
             )
             if cursor.rowcount > 0:
+                lead_id = cursor.lastrowid
                 self.lead_found.emit({
                     'record_type': 'ORGANIZATION',
                     'business_name': business_name,
@@ -80,13 +82,21 @@ class LeadAgent(QObject):
                     'lead_score': 70,
                     'source_urls': website
                 })
-            # Fetch the lead_id
-            if email:
-                cursor.execute("SELECT lead_id FROM leads WHERE email = ?", (email,))
-            else:
-                cursor.execute("SELECT lead_id FROM leads WHERE website = ? AND business_name = ?", (website, business_name))
-            row = cursor.fetchone()
-            return row[0] if row else None
+            # Fetch the lead_id (for duplicate case)
+            if lead_id is None:
+                if email:
+                    cursor.execute("SELECT lead_id FROM leads WHERE email = ? AND record_type='ORGANIZATION'", (email,))
+                elif website:
+                    cursor.execute("SELECT lead_id FROM leads WHERE business_name = ? AND city = ? AND website = ? AND record_type='ORGANIZATION'", (business_name, city, website))
+                else:
+                    cursor.execute("SELECT lead_id FROM leads WHERE business_name = ? AND city = ? AND website IS NULL AND record_type='ORGANIZATION'", (business_name, city))
+                row = cursor.fetchone()
+                if row:
+                    lead_id = row[0]
+            return lead_id
+        except Exception as e:
+            self.status_updated.emit(f"Error saving organization lead: {e}")
+            return None
         finally:
             conn.commit()
             conn.close()
@@ -158,6 +168,9 @@ class LeadAgent(QObject):
                     time.sleep(1)
                 
                 print(len(results))
+
+            # Process Google Places results for this city
+            self._process_google_places(city_name)
 
         if not self._stopped:
             self.status_updated.emit("All cities processed.")
@@ -360,6 +373,25 @@ class LeadAgent(QObject):
         except Exception as e:
             self.status_updated.emit(f"Google Places error: {e}")
             return []
+
+    def _process_google_places(self, city_name):
+        places = self.search_google_places(city_name)
+        for place in places:
+            if self._stopped:
+                break
+            self.wait_if_paused()
+            org_lead_id = self._save_organization_lead(
+                city_name,
+                place["name"],
+                place["website"],
+                emails=[],
+                phones=[place["phone"]]
+            )
+            if org_lead_id is not None and place["website"]:
+                domain = self._extract_domain(place["website"])
+                if domain:
+                    self._discover_employees(domain, org_lead_id)
+            time.sleep(1)
 
     def _save_person_lead(self, org_lead_id, email, domain):
         conn = sqlite3.connect(database.DB_PATH)
