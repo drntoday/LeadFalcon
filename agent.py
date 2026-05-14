@@ -10,6 +10,7 @@ import re
 from email_validator import validate_email, EmailNotValidError
 import phonenumbers
 import database
+from urllib.parse import urlparse
 
 
 class LeadAgent(QObject):
@@ -50,6 +51,15 @@ class LeadAgent(QObject):
         conn.commit()
         conn.close()
 
+    def _extract_domain(self, url):
+        parsed = urlparse(url)
+        netloc = parsed.netloc
+        if netloc.startswith('www.'):
+            netloc = netloc[4:]
+        if ':' in netloc:
+            netloc = netloc.split(':')[0]
+        return netloc
+
     def _save_organization_lead(self, city, business_name, website, emails, phones):
         conn = sqlite3.connect(database.DB_PATH)
         cursor = conn.cursor()
@@ -70,6 +80,13 @@ class LeadAgent(QObject):
                     'lead_score': 70,
                     'source_urls': website
                 })
+            # Fetch the lead_id
+            if email:
+                cursor.execute("SELECT lead_id FROM leads WHERE email = ?", (email,))
+            else:
+                cursor.execute("SELECT lead_id FROM leads WHERE website = ? AND business_name = ?", (website, business_name))
+            row = cursor.fetchone()
+            return row[0] if row else None
         finally:
             conn.commit()
             conn.close()
@@ -132,7 +149,11 @@ class LeadAgent(QObject):
                     contacts = self.extract_contacts_from_page(url)
                     if contacts.get('emails', []) or contacts.get('phones', []):
                         business_name = self._guess_business_name(title, url)
-                        self._save_organization_lead(city_name, business_name, url, contacts.get('emails', []), contacts.get('phones', []))
+                        org_lead_id = self._save_organization_lead(city_name, business_name, url, contacts.get('emails', []), contacts.get('phones', []))
+                        if org_lead_id:
+                            domain = self._extract_domain(url)
+                            if domain:
+                                self._discover_employees(domain, org_lead_id)
                     self._mark_search_result_extracted(result_id)
                     time.sleep(1)
                 
@@ -295,3 +316,44 @@ class LeadAgent(QObject):
         if html is None:
             return {"emails": [], "phones": []}
         return self.extract_contacts_from_text(html)
+
+    def _save_person_lead(self, org_lead_id, email, domain):
+        conn = sqlite3.connect(database.DB_PATH)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "INSERT OR IGNORE INTO leads (record_type, parent_org_id, email, lead_score, source_urls) VALUES ('PERSON', ?, ?, 60, '')",
+                (org_lead_id, email)
+            )
+            if cursor.rowcount > 0:
+                self.lead_found.emit({
+                    'record_type': 'PERSON',
+                    'parent_org_id': org_lead_id,
+                    'email': email,
+                    'lead_score': 60,
+                    'source_urls': ''
+                })
+        finally:
+            conn.commit()
+            conn.close()
+
+    def _discover_employees(self, domain, org_lead_id):
+        query = f'"@{domain}"'
+        snippets = self.search_web(query, max_results=10)
+        concatenated_text = '\n'.join([s.get('snippet', '') for s in snippets])
+        extracted = self.extract_contacts_from_text(concatenated_text)
+        emails = extracted.get('emails', [])
+        
+        conn = sqlite3.connect(database.DB_PATH)
+        cursor = conn.cursor()
+        try:
+            for email in emails:
+                # Check if email already exists in leads table
+                cursor.execute("SELECT lead_id FROM leads WHERE email = ?", (email,))
+                if cursor.fetchone():
+                    continue
+                # Insert as person lead
+                self._save_person_lead(org_lead_id, email, domain)
+        finally:
+            conn.close()
+        time.sleep(2)
