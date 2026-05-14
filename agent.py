@@ -14,6 +14,30 @@ import database
 from urllib.parse import urlparse
 
 
+SYSTEM_PROMPT = """
+You are an expert Italian B2B lead researcher. Your goal is to find high-quality contact details (email, phone, owner name, buyer contacts) of leather-goods retailers, boutiques, and wholesalers in the current city. 
+
+You have access to tools: 
+- search_web: search for businesses, contact pages, directories.
+- fetch_url: retrieve the full text of a webpage.
+- extract_contacts_from_page: fetch a URL and automatically extract emails and phone numbers.
+- query_db: run SELECT queries to check for duplicates, see existing leads, or check city/keyword status.
+- save_lead: store a discovered lead (organization or person) after verifying it's not a duplicate.
+- google_places_search: get structured business data (name, address, phone, website) from Google Places.
+- mark_city_done: call this when you are confident you have exhausted the city.
+- discover_employees: search for employee email addresses from an organization's domain and save them.
+
+Strategy:
+1. Start by searching the web with multiple Italian phrases (pelletteria, borse in pelle, negozio accessori moda, rivenditore, etc.) combined with the city name.
+2. For promising URLs from search results, use extract_contacts_from_page to quickly get contacts. If a page has no contact info, skip it.
+3. If you find a business website, save the organization lead with a score based on confidence (70-90). Then use discover_employees on its domain.
+4. Also use google_places_search to find brick-and-mortar stores.
+5. Always check for duplicates via query_db before saving. 
+6. If a city yields very few results, try broader queries (e.g., "negozi abbigliamento {city}").
+7. When you have tried multiple angles and found all reasonable leads, call mark_city_done.
+"""
+
+
 class LeadAgent(QObject):
     status_updated = Signal(str)
     lead_found = Signal(dict)
@@ -257,10 +281,10 @@ class LeadAgent(QObject):
         return domain
 
     def run(self):
-        self.status_updated.emit("Connecting to database...")
+        self.status_updated.emit("Agent started.")
         conn = sqlite3.connect(database.DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("SELECT id, name, region FROM cities WHERE status = 'pending'")
+        cursor.execute("SELECT id, name, region FROM cities WHERE status = 'pending' ORDER BY id")
         rows = cursor.fetchall()
         conn.close()
 
@@ -274,52 +298,82 @@ class LeadAgent(QObject):
                 break
             self.wait_if_paused()
             city_id, city_name, region = city
-            self.status_updated.emit(f"Processing {city_name}...")
-            time.sleep(1)
-            keywords = self.generate_keywords_for_city(city_name)
-            for keyword in keywords:
+            self.status_updated.emit(f"Processing city: {city_name}")
+            self.progress_updated.emit(city_name, 0, 0)
+
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": f"Current city: {city_name} (ID: {city_id}). Find leather-related business leads. Start by checking if we already have keywords or search queries for this city, then proceed."}
+            ]
+
+            turn_counter = 0
+            max_turns = 30
+
+            while True:
+                if self._stopped:
+                    break
                 self.wait_if_paused()
-                keyword_id = self._get_or_create_keyword(city_id, keyword)
-                query_id = self._get_or_create_search_query(city_id, keyword_id)
-                if query_id is None:
-                    continue
-                results = self.search_web(keyword)
-                self._store_search_results(query_id, results)
-                
-                # Fetch unextracted search results for this query
-                conn = sqlite3.connect(database.DB_PATH)
-                cursor = conn.cursor()
-                cursor.execute("SELECT id, url, title FROM search_results WHERE query_id = ? AND extracted = 0", (query_id,))
-                unextracted = cursor.fetchall()
-                conn.close()
-                
-                for result_id, url, title in unextracted:
-                    if self._stopped:
-                        break
-                    self.wait_if_paused()
-                    self.status_updated.emit(f"Extracting contacts from: {url}")
-                    contacts = self.extract_contacts_from_page(url)
-                    if contacts.get('emails', []) or contacts.get('phones', []):
-                        business_name = self._guess_business_name(title, url)
-                        org_lead_id = self._save_organization_lead(city_name, business_name, url, contacts.get('emails', []), contacts.get('phones', []))
-                        if org_lead_id:
-                            domain = self._extract_domain(url)
-                            if domain:
-                                self._discover_employees(domain, org_lead_id)
-                    self._mark_search_result_extracted(result_id)
-                    time.sleep(1)
-                
-                print(len(results))
 
-            # Process Google Places results for this city
-            self._process_google_places(city_name)
+                turn_counter += 1
+                if turn_counter > max_turns:
+                    self.status_updated.emit("Max turns reached for city, moving on.")
+                    break
 
-            # Mark the city as done after all processing is complete
+                response = self._groq_chat(messages)
+                if response is None:
+                    break
+
+                message = response.choices[0].message
+
+                if message.content:
+                    truncated_content = message.content[:80] + "..." if len(message.content) > 80 else message.content
+                    self.status_updated.emit(f"Groq: {truncated_content}")
+
+                if message.tool_calls:
+                    assistant_message = {
+                        "role": "assistant",
+                        "content": message.content,
+                        "tool_calls": []
+                    }
+                    for tc in message.tool_calls:
+                        assistant_message["tool_calls"].append({
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
+                        })
+                    messages.append(assistant_message)
+
+                    for tool_call in message.tool_calls:
+                        result_str = self._execute_tool_call(tool_call)
+                        self.status_updated.emit(f"Tool {tool_call.function.name} executed.")
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": result_str
+                        })
+                else:
+                    messages.append({"role": "user", "content": "What is your next action? Please use a tool."})
+
             self._mark_city_done(city_id)
+
+            conn = sqlite3.connect(database.DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM leads WHERE city = ?", (city_name,))
+            row = cursor.fetchone()
+            leads_count_for_city = row[0] if row else 0
+            cursor.execute("SELECT COUNT(*) FROM leads")
+            total_row = cursor.fetchone()
+            total_leads = total_row[0] if total_row else 0
+            conn.close()
+
+            self.progress_updated.emit(city_name, leads_count_for_city, total_leads)
 
         if not self._stopped:
             self.status_updated.emit("All cities processed.")
-            self.finished.emit()
+        self.finished.emit()
 
     def search_web(self, query, max_results=10):
         self.status_updated.emit(f"Searching: {query}")
