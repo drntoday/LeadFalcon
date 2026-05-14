@@ -168,8 +168,9 @@ class MainWindow(QMainWindow):
             self.city_combo.addItems(cities)
         else:
             # Use user-defined list from settings
-            if 'cities' in self.app_settings:
-                self.city_combo.addItems(self.app_settings['cities'])
+            cities = self.app_settings.get('cities', [])
+            if cities:
+                self.city_combo.addItems(cities)
         
         # Min Score label and spin box
         score_label = QLabel("Min Score:")
@@ -309,7 +310,7 @@ class MainWindow(QMainWindow):
         self.settings_dialog = SettingsDialog(self)
         # Pre-populate checkbox state from settings
         if 'use_all_comuni' in self.app_settings:
-            self.settings_dialog.comuni_checkbox.setChecked(self.app_settings['use_all_comuni'])
+            self.settings_dialog.comuni_checkbox.setChecked(self.app_settings.get('use_all_comuni', False))
         if self.settings_dialog.exec() == QDialog.Accepted:
             self.app_settings = self.settings_dialog.settings
             self.city_combo.clear()
@@ -324,7 +325,9 @@ class MainWindow(QMainWindow):
                 cities = [row[0] for row in rows]
                 self.city_combo.addItems(cities)
             else:
-                self.city_combo.addItems(self.app_settings['cities'])
+                cities = self.app_settings.get('cities', [])
+                if cities:
+                    self.city_combo.addItems(cities)
             if self.city_combo.count() > 0:
                 self.city_combo.setCurrentIndex(0)
             with open(SETTINGS_FILE, 'w') as f:
