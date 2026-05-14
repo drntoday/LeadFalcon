@@ -31,6 +31,12 @@ class SettingsDialog(QDialog):
         self.groq_key_edit.setObjectName("groq_key")
         form_layout.addRow("Groq API Key", self.groq_key_edit)
         
+        # Scraping Speed
+        self.speed_edit = QLineEdit()
+        self.speed_edit.setText("Polite")
+        self.speed_edit.setObjectName("speed")
+        form_layout.addRow("Scraping Speed", self.speed_edit)
+        
         # Add form layout to main layout
         main_layout.addLayout(form_layout)
         
@@ -42,7 +48,8 @@ class SettingsDialog(QDialog):
     
     def on_accepted(self):
         self.settings = {
-            "groq_key": self.groq_key_edit.text()
+            "groq_key": self.groq_key_edit.text(),
+            "speed": self.speed_edit.text()
         }
         self.accept()
 
