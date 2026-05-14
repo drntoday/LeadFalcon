@@ -61,6 +61,10 @@ class LeadAgent(QObject):
             keywords = self.generate_keywords_for_city(city_name)
             for keyword in keywords:
                 self.wait_if_paused()
+                keyword_id = self._get_or_create_keyword(city_id, keyword)
+                query_id = self._get_or_create_search_query(city_id, keyword_id)
+                if query_id is None:
+                    continue
                 results = self.search_web(keyword)
                 print(len(results))
 
@@ -136,6 +140,27 @@ class LeadAgent(QObject):
             return cursor.lastrowid
         except Exception as e:
             self.status_updated.emit(f"Keyword error: {e}")
+            return None
+        finally:
+            if conn:
+                conn.close()
+
+    def _get_or_create_search_query(self, city_id, keyword_id):
+        conn = None
+        try:
+            conn = sqlite3.connect(database.DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM search_queries WHERE keyword_id = ?", (keyword_id,))
+            row = cursor.fetchone()
+            if row:
+                self.status_updated.emit("Search query already recorded, skipping.")
+                return None
+            cursor.execute("INSERT INTO search_queries (city_id, keyword_id, source) VALUES (?, ?, ?)",
+                           (city_id, keyword_id, 'web'))
+            conn.commit()
+            return cursor.lastrowid
+        except Exception as e:
+            self.status_updated.emit(f"Search query error: {e}")
             return None
         finally:
             if conn:
