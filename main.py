@@ -166,21 +166,24 @@ class MainWindow(QMainWindow):
             csv_path = os.path.join(os.path.dirname(__file__), "comuni.csv")
             
             # Create thread and loader for background loading
-            self.load_thread = QThread()
-            self.municipality_loader = MunicipalityLoader(csv_path)
-            self.municipality_loader.moveToThread(self.load_thread)
-            
-            # Connect signals
-            self.municipality_loader.progress.connect(self.on_load_progress)
-            self.municipality_loader.finished.connect(self.on_load_finished)
-            self.municipality_loader.finished.connect(self._check_auto_start_after_load)
-            self.municipality_loader.error.connect(self.on_load_error)
-            self.load_thread.started.connect(self.municipality_loader.load)
-            self.municipality_loader.finished.connect(self.load_thread.quit)
-            self.load_thread.finished.connect(self.load_thread.deleteLater)
-            
-            # Start the thread
-            self.load_thread.start()
+            try:
+                self.load_thread = QThread()
+                self.municipality_loader = MunicipalityLoader(csv_path)
+                self.municipality_loader.moveToThread(self.load_thread)
+                
+                # Connect signals
+                self.municipality_loader.progress.connect(self.on_load_progress)
+                self.municipality_loader.finished.connect(self.on_load_finished)
+                self.municipality_loader.finished.connect(self._check_auto_start_after_load)
+                self.municipality_loader.error.connect(self.on_load_error)
+                self.load_thread.started.connect(self.municipality_loader.load)
+                self.municipality_loader.finished.connect(self.load_thread.quit)
+                self.load_thread.finished.connect(self.load_thread.deleteLater)
+                
+                # Start the thread
+                self.load_thread.start()
+            except Exception as e:
+                self.statusBar().showMessage(f"Error loading municipalities: {e}")
         else:
             # Municipalities already loaded, check auto_start
             if self.app_settings.get("auto_start", False):
