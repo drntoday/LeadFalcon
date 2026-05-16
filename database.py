@@ -5,64 +5,52 @@ import traceback
 import curl_cffi.requests
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "leadfalcon.db")
+CSV_PATH = "comuni.csv"
 CSV_URL = "https://raw.githubusercontent.com/MatteoRagni/Italian-Comuni-List/master/comuni.csv"
 
 
-def _download_csv(path):
-    """Download the CSV from CSV_URL and write it to path.
-    
-    Args:
-        path: Path to write the downloaded CSV file.
-        
-    Raises:
-        Exception: If the download fails.
-    """
-    response = curl_cffi.requests.get(CSV_URL)
-    if response.status_code != 200:
-        raise Exception(f"Failed to download CSV: HTTP {response.status_code}")
-    with open(path, 'w', encoding='utf-8') as f:
-        f.write(response.text)
-
-
-def import_comuni_from_csv(csv_path, progress_callback=None):
+def import_comuni_from_csv(csv_path=None, progress_callback=None):
     """Import Italian municipalities from a CSV file into the cities table.
     
     Args:
-        csv_path: Path to the CSV file with columns 'nome' and 'regione'.
+        csv_path: Path to the CSV file with columns 'nome' and 'regione'. Defaults to CSV_PATH.
         progress_callback: Optional callback function(current_row, total_rows) called every 100 rows.
         
     Returns:
-        Number of new rows inserted.
+        Number of new rows inserted, or -1 on error.
         
     Raises:
-        FileNotFoundError: If the CSV file does not exist and cannot be downloaded.
         ValueError: If the CSV file is invalid or missing required columns.
     """
-    # Check if file exists, if not download it
-    if not os.path.exists(csv_path):
-        _download_csv(csv_path)
-    else:
-        # Check if file is a placeholder (less than 1000 rows)
-        needs_download = False
+    if csv_path is None:
+        csv_path = CSV_PATH
+    
+    # Always delete existing file and download fresh copy
+    if os.path.exists(csv_path):
         try:
-            with open(csv_path, 'r', encoding='utf-8') as f:
-                reader = csv.reader(f)
-                next(reader, None)  # Skip header
-                row_count = sum(1 for _ in reader)
-                if row_count < 1000:
-                    needs_download = True
-        except Exception:
-            needs_download = True
-        
-        if needs_download:
-            _download_csv(csv_path)
+            os.remove(csv_path)
+        except Exception as e:
+            print(f"Error deleting existing CSV: {e}")
+            return -1
+    
+    # Download fresh copy
+    try:
+        response = curl_cffi.requests.get(CSV_URL)
+        if response.status_code != 200:
+            print(f"Failed to download CSV: HTTP {response.status_code}")
+            return -1
+        with open(csv_path, 'w', encoding='utf-8') as f:
+            f.write(response.text)
+    except Exception as e:
+        print(f"Error downloading CSV: {e}")
+        return -1
     
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
         inserted_count = 0
-        batch_size = 100
+        batch_size = 500
         batch = []
         
         with open(csv_path, 'r', encoding='utf-8') as f:
@@ -72,24 +60,17 @@ def import_comuni_from_csv(csv_path, progress_callback=None):
             if reader.fieldnames is None:
                 raise ValueError("CSV file is empty or has no headers")
             
-            # Check for required columns (support both Italian and English naming)
-            valid_name_cols = {'nome', 'name'}
-            valid_region_cols = {'regione', 'region'}
-            
-            has_name = any(col in reader.fieldnames for col in valid_name_cols)
-            has_region = any(col in reader.fieldnames for col in valid_region_cols)
-            
-            if not has_name or not has_region:
-                raise ValueError(f"CSV must contain 'nome' (or 'name') and 'regione' (or 'region') columns. Found: {reader.fieldnames}")
+            # Check for required columns - must have 'nome' and 'regione'
+            if 'nome' not in reader.fieldnames or 'regione' not in reader.fieldnames:
+                raise ValueError(f"CSV must contain 'nome' and 'regione' columns. Found: {reader.fieldnames}")
             
             # Count total rows for progress reporting
             rows_list = list(reader)
             total_rows = len(rows_list)
             
             for i, row in enumerate(rows_list):
-                # Support both column naming conventions
-                name = row.get('nome', row.get('name', '')).strip()
-                region = row.get('regione', row.get('region', '')).strip()
+                name = row['nome'].strip()
+                region = row['regione'].strip()
                 
                 if name and region:
                     batch.append((name, region))
