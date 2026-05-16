@@ -6,7 +6,7 @@ import curl_cffi.requests
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "leadfalcon.db")
 CSV_PATH = "comuni.csv"
-CSV_URL = "https://raw.githubusercontent.com/italia/dati-istat/master/elenco-comuni-italiani.csv"
+CSV_URL = "https://raw.githubusercontent.com/italia/dati-istat/master/elenco-comuni-italiani.csv "
 
 
 def import_comuni_from_csv(csv_path=None, progress_callback=None):
