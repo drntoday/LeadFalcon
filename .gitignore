@@ -1,1 +1,30 @@
-Nothing needs to be added to .gitignore since the changes only include Python source files (.py) and a deleted CSV file, with no build artifacts, dependencies, or temporary files present.
+```gitignore
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.venv/
+.env
+.env.local
+.env.*
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.swp
+
+# IDE
+.vscode/
+.idea/
+
+# Build artifacts
+dist/
+build/
+target/
+```
