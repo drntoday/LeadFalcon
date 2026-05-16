@@ -19,6 +19,7 @@ class MunicipalityLoader(QObject):
     
     progress = Signal(int, int, str)  # current, total, message
     finished = Signal(int)  # new_rows
+    error = Signal(str)  # error message
     
     def __init__(self, csv_path):
         super().__init__()
@@ -32,9 +33,13 @@ class MunicipalityLoader(QObject):
         """Load municipalities from CSV and emit progress/finished signals."""
         try:
             new_rows = database.import_comuni_from_csv(self.csv_path, progress_callback=self._on_progress)
-            self.finished.emit(new_rows)
+            if new_rows == -1:
+                self.error.emit("Failed to download or import municipalities")
+                self.finished.emit(0)
+            else:
+                self.finished.emit(new_rows)
         except Exception as e:
-            self.progress.emit(0, 0, f"Error loading municipalities: {e}")
+            self.error.emit(f"Error loading municipalities: {e}")
             self.finished.emit(0)
 
 
@@ -169,6 +174,7 @@ class MainWindow(QMainWindow):
             self.municipality_loader.progress.connect(self.on_load_progress)
             self.municipality_loader.finished.connect(self.on_load_finished)
             self.municipality_loader.finished.connect(self._check_auto_start_after_load)
+            self.municipality_loader.error.connect(self.on_load_error)
             self.load_thread.started.connect(self.municipality_loader.load)
             self.municipality_loader.finished.connect(self.load_thread.quit)
             self.load_thread.finished.connect(self.load_thread.deleteLater)
@@ -265,7 +271,11 @@ class MainWindow(QMainWindow):
     
     def on_load_finished(self, new_rows):
         """Slot for when municipality loading is complete."""
-        self.statusBar().showMessage(f"{new_rows} municipalities loaded.")
+        self.statusBar().showMessage(f"Loaded {new_rows} municipalities")
+    
+    def on_load_error(self, error_message):
+        """Slot for handling municipality loading errors."""
+        self.statusBar().showMessage(f"Error: {error_message}")
     
     def _check_auto_start_after_load(self, new_rows):
         """Check auto_start setting after municipality loading completes."""
