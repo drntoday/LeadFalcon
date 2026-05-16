@@ -6,7 +6,7 @@ import curl_cffi.requests
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "leadfalcon.db")
 CSV_PATH = "comuni.csv"
-CSV_URL = "https://raw.githubusercontent.com/MatteoRagni/Italian-Comuni-List/master/comuni.csv "
+CSV_URL = "https://raw.githubusercontent.com/italia/dati-istat/master/elenco-comuni-italiani.csv"
 
 
 def import_comuni_from_csv(csv_path=None, progress_callback=None):
@@ -60,17 +60,17 @@ def import_comuni_from_csv(csv_path=None, progress_callback=None):
             if reader.fieldnames is None:
                 raise ValueError("CSV file is empty or has no headers")
             
-            # Check for required columns - must have 'nome' and 'regione'
-            if 'nome' not in reader.fieldnames or 'regione' not in reader.fieldnames:
-                raise ValueError(f"CSV must contain 'nome' and 'regione' columns. Found: {reader.fieldnames}")
+            # Check for required columns - must have 'Comune' and 'Regione'
+            if 'Comune' not in reader.fieldnames or 'Regione' not in reader.fieldnames:
+                raise ValueError(f"CSV must contain 'Comune' and 'Regione' columns. Found: {reader.fieldnames}")
             
             # Count total rows for progress reporting
             rows_list = list(reader)
             total_rows = len(rows_list)
             
             for i, row in enumerate(rows_list):
-                name = row['nome'].strip()
-                region = row['regione'].strip()
+                name = row['Comune'].strip()
+                region = row['Regione'].strip()
                 
                 if name and region:
                     batch.append((name, region))
