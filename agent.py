@@ -85,6 +85,7 @@ class LeadAgent(QObject):
             )
             if cursor.rowcount > 0:
                 lead_id = cursor.lastrowid
+                print(f"[save_organization_lead] Business: {business_name}, Status: saved")
                 self.lead_found.emit({
                     'record_type': 'ORGANIZATION',
                     'business_name': business_name,
@@ -106,6 +107,7 @@ class LeadAgent(QObject):
                 row = cursor.fetchone()
                 if row:
                     lead_id = row[0]
+                    print(f"[save_organization_lead] Business: {business_name}, Status: duplicate")
             return lead_id
         except Exception as e:
             self.status_updated.emit(f"Error saving organization lead: {e}")
@@ -150,6 +152,7 @@ class LeadAgent(QObject):
         cursor.execute("UPDATE cities SET plan = ? WHERE id = ?", (json.dumps(queries), city_id))
         conn.commit()
         conn.close()
+        print(f"[_generate_and_store_plan] Queries generated: {len(queries)}, First 3: {queries[:3]}")
         return queries
 
     def run(self):
@@ -188,6 +191,17 @@ class LeadAgent(QObject):
                 if not queries:
                     self.status_updated.emit("No queries generated, marking city done.")
                     self._mark_city_done(city_id)
+                    # Still emit progress for this city even with no queries
+                    conn_progress = sqlite3.connect(database.DB_PATH)
+                    cursor_progress = conn_progress.cursor()
+                    cursor_progress.execute("SELECT COUNT(*) FROM leads WHERE city = ?", (city_name,))
+                    row_progress = cursor_progress.fetchone()
+                    leads_count_for_city = row_progress[0] if row_progress else 0
+                    cursor_progress.execute("SELECT COUNT(*) FROM leads")
+                    total_row = cursor_progress.fetchone()
+                    total_leads = total_row[0] if total_row else 0
+                    conn_progress.close()
+                    self.progress_updated.emit(city_name, leads_count_for_city, total_leads)
                     continue
             
             # Execute each query deterministically
@@ -223,7 +237,7 @@ class LeadAgent(QObject):
                 
                 time.sleep(2)  # Between queries
             
-            # Check if less than 3 leads found for this city
+            # Check how many leads found for this city
             conn_check = sqlite3.connect(database.DB_PATH)
             cursor_check = conn_check.cursor()
             cursor_check.execute("SELECT COUNT(*) FROM leads WHERE city = ?", (city_name,))
@@ -269,6 +283,50 @@ class LeadAgent(QObject):
                         
                         time.sleep(2)
             
+            # Simple fallback: if still zero leads, perform last-ditch search with generic query
+            conn_check2 = sqlite3.connect(database.DB_PATH)
+            cursor_check2 = conn_check2.cursor()
+            cursor_check2.execute("SELECT COUNT(*) FROM leads WHERE city = ?", (city_name,))
+            row_check2 = cursor_check2.fetchone()
+            leads_count_for_city = row_check2[0] if row_check2 else 0
+            conn_check2.close()
+            
+            if leads_count_for_city == 0:
+                self.status_updated.emit(f"Zero leads found for {city_name}. Performing last-ditch fallback search...")
+                fallback_query = f"pelletteria {city_name}"
+                print(f"[run] Fallback query: {fallback_query}")
+                fallback_results = self.search_web(fallback_query, max_results=5)
+                
+                for result in fallback_results:
+                    if self._stopped:
+                        break
+                    self.wait_if_paused()
+                    contacts = self.extract_contacts_from_page(result['url'])
+                    if contacts.get('emails') or contacts.get('phones'):
+                        business_name = result.get('title', '')
+                        website = result.get('url', '')
+                        lead_id = self._save_organization_lead(
+                            city=city_name,
+                            business_name=business_name,
+                            website=website,
+                            emails=contacts.get('emails', []),
+                            phones=contacts.get('phones', [])
+                        )
+                        if lead_id and website:
+                            domain = self._extract_domain(website)
+                            if domain:
+                                self._discover_employees(domain, lead_id)
+                    time.sleep(random.uniform(1, 3))
+            
+            # Print total leads found for this city
+            conn_final = sqlite3.connect(database.DB_PATH)
+            cursor_final = conn_final.cursor()
+            cursor_final.execute("SELECT COUNT(*) FROM leads WHERE city = ?", (city_name,))
+            row_final = cursor_final.fetchone()
+            leads_count_for_city = row_final[0] if row_final else 0
+            conn_final.close()
+            print(f"[city] {city_name}: total leads found = {leads_count_for_city}")
+            
             # Mark city done
             self._mark_city_done(city_id)
             
@@ -304,6 +362,9 @@ class LeadAgent(QObject):
         except Exception as e:
             self.status_updated.emit(f"Search error: {e}")
             return []
+        print(f"[search_web] Query: {query}, Results: {len(results)}")
+        if len(results) == 0:
+            print(f"[search_web] Warning: No results returned for query '{query}'")
         time.sleep(2)
         return results
 
@@ -311,6 +372,7 @@ class LeadAgent(QObject):
         self.status_updated.emit(f"Fetching: {url}")
         try:
             response = requests.get(url, impersonate="chrome", timeout=10)
+            print(f"[fetch_url] URL: {url}, Status: {response.status_code}")
             if response.status_code == 200:
                 return response.text
             else:
@@ -367,8 +429,16 @@ class LeadAgent(QObject):
     def extract_contacts_from_page(self, url):
         html = self.fetch_url(url)
         if html is None:
+            print(f"[extract_contacts_from_page] URL: {url}, No contacts found (fetch failed)")
             return {"emails": [], "phones": []}
-        return self.extract_contacts_from_text(html)
+        contacts = self.extract_contacts_from_text(html)
+        emails = contacts.get('emails', [])
+        phones = contacts.get('phones', [])
+        if emails or phones:
+            print(f"[extract_contacts_from_page] URL: {url}, Emails: {emails}, Phones: {phones}")
+        else:
+            print(f"[extract_contacts_from_page] URL: {url}, No contacts found")
+        return contacts
 
 
     def _save_person_lead(self, org_lead_id, email, domain, person_full_name=None, role=None, linkedin_url=None):
