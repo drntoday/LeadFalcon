@@ -12,6 +12,7 @@ import database
 from agent import LeadAgent
 
 SETTINGS_FILE = "settings.json"
+PARTS_DIR = "comuni_parts"
 
 
 class MunicipalityLoader(QObject):
@@ -25,19 +26,19 @@ class MunicipalityLoader(QObject):
         super().__init__()
         self.csv_path = csv_path
     
-    def _on_progress(self, current, total):
+    def _on_progress(self, current_part, total_parts, rows_so_far, message):
         """Internal callback that emits the progress signal."""
-        self.progress.emit(current, total, f"Loading municipalities: {current}/{total}")
+        self.progress.emit(current_part, total_parts, f"Part {current_part}/{total_parts} – {rows_so_far} rows")
     
     def load(self):
-        """Load municipalities from CSV and emit progress/finished signals."""
+        """Load municipalities from CSV parts and emit progress/finished signals."""
         try:
-            new_rows = database.import_comuni_from_csv(self.csv_path, progress_callback=self._on_progress)
-            if new_rows == -1:
-                self.error.emit("Failed to download or import municipalities")
+            count = database.import_comuni_from_parts(PARTS_DIR, progress_callback=self._on_progress)
+            if count == -1:
+                self.error.emit("Failed to import municipalities")
                 self.finished.emit(0)
             else:
-                self.finished.emit(new_rows)
+                self.finished.emit(count)
         except Exception as e:
             self.error.emit(f"Error loading municipalities: {e}")
             self.finished.emit(0)

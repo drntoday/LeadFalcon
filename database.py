@@ -1,9 +1,189 @@
 import sqlite3
 import os
 import csv
+import traceback
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "leadfalcon.db")
 CSV_PATH = "comuni.csv"
+CHUNK_SIZE = 200
+
+
+def split_csv_into_parts(source_path, output_dir, chunk_size=200):
+    """Split a large CSV file into smaller parts with the same header.
+    
+    Args:
+        source_path: Path to the source CSV file.
+        output_dir: Directory where part files will be created.
+        chunk_size: Number of data rows per part file (default 200).
+        
+    Returns:
+        Sorted list of full paths to the created part files.
+    """
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    
+    part_files = []
+    
+    with open(source_path, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f, delimiter=';')
+        header = next(reader)
+        
+        part_index = 1
+        row_buffer = []
+        
+        for row in reader:
+            row_buffer.append(row)
+            
+            if len(row_buffer) >= chunk_size:
+                part_filename = f"part_{part_index:04d}.csv"
+                part_path = os.path.join(output_dir, part_filename)
+                
+                with open(part_path, 'w', encoding='utf-8', newline='') as out_f:
+                    writer = csv.writer(out_f, delimiter=';')
+                    writer.writerow(header)
+                    writer.writerows(row_buffer)
+                
+                part_files.append(part_path)
+                part_index += 1
+                row_buffer = []
+        
+        # Write remaining rows
+        if row_buffer:
+            part_filename = f"part_{part_index:04d}.csv"
+            part_path = os.path.join(output_dir, part_filename)
+            
+            with open(part_path, 'w', encoding='utf-8', newline='') as out_f:
+                writer = csv.writer(out_f, delimiter=';')
+                writer.writerow(header)
+                writer.writerows(row_buffer)
+            
+            part_files.append(part_path)
+    
+    return sorted(part_files)
+
+
+def import_comuni_from_parts(parts_dir, progress_callback=None):
+    """Import Italian municipalities from CSV parts into the cities table.
+    
+    Splits the main CSV into chunks if needed, then imports each part while
+    tracking progress in csv_import_status table.
+    
+    Args:
+        parts_dir: Directory containing or to contain the CSV part files.
+        progress_callback: Optional function(part_index, total_parts, rows_so_far, message)
+                          called after each part is processed.
+                          
+    Returns:
+        Total number of new rows inserted across all parts.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Create csv_import_status table if it doesn't exist
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS csv_import_status (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            part_file TEXT UNIQUE NOT NULL,
+            status TEXT DEFAULT 'pending',
+            inserted_count INTEGER DEFAULT 0,
+            processed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    
+    # Check if parts_dir exists and contains part files
+    if not os.path.exists(parts_dir) or not any(f.startswith('part_') and f.endswith('.csv') for f in os.listdir(parts_dir)):
+        split_csv_into_parts(CSV_PATH, parts_dir, CHUNK_SIZE)
+    
+    # Get list of all part files
+    part_files = sorted([
+        os.path.join(parts_dir, f) 
+        for f in os.listdir(parts_dir) 
+        if f.startswith('part_') and f.endswith('.csv')
+    ])
+    
+    if not part_files:
+        conn.close()
+        return 0
+    
+    # Register any missing part files in csv_import_status
+    for part_path in part_files:
+        cursor.execute(
+            "INSERT OR IGNORE INTO csv_import_status (part_file, status) VALUES (?, 'pending')",
+            (part_path,)
+        )
+    conn.commit()
+    
+    # Fetch pending parts
+    cursor.execute("SELECT part_file FROM csv_import_status WHERE status = 'pending' ORDER BY part_file")
+    pending_parts = [row[0] for row in cursor.fetchall()]
+    
+    total_inserted = 0
+    
+    for idx, part_path in enumerate(pending_parts):
+        part_index = idx + 1
+        total_parts = len(pending_parts)
+        
+        try:
+            with open(part_path, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f, delimiter=';')
+                
+                # Validate required columns
+                if reader.fieldnames is None:
+                    raise ValueError(f"CSV file is empty or has no headers: {part_path}")
+                
+                required_cols = ['Denominazione in italiano', 'Denominazione regione']
+                for col in required_cols:
+                    if col not in reader.fieldnames:
+                        raise ValueError(f"Missing required column: {col}. Found: {reader.fieldnames}")
+                
+                batch = []
+                batch_size = 100
+                part_inserted = 0
+                
+                for row in reader:
+                    name = row['Denominazione in italiano'].strip()
+                    region = row['Denominazione regione'].strip()
+                    
+                    if name and region:
+                        batch.append((name, region))
+                        
+                        if len(batch) >= batch_size:
+                            cursor.executemany(
+                                "INSERT OR IGNORE INTO cities (name, region) VALUES (?, ?)",
+                                batch
+                            )
+                            part_inserted += cursor.rowcount
+                            batch = []
+                
+                # Insert remaining rows
+                if batch:
+                    cursor.executemany(
+                        "INSERT OR IGNORE INTO cities (name, region) VALUES (?, ?)",
+                        batch
+                    )
+                    part_inserted += cursor.rowcount
+                
+                conn.commit()
+                
+                # Update status to 'done'
+                cursor.execute(
+                    "UPDATE csv_import_status SET status = 'done', inserted_count = ?, processed_at = CURRENT_TIMESTAMP WHERE part_file = ?",
+                    (part_inserted, part_path)
+                )
+                conn.commit()
+                
+                total_inserted += part_inserted
+                
+                if progress_callback:
+                    progress_callback(part_index, total_parts, total_inserted, f"Part {part_index}/{total_parts} completed")
+        
+        except Exception as e:
+            print(f"Error processing part {part_path}: {e}")
+            traceback.print_exc()
+    
+    conn.close()
+    return total_inserted
 
 
 def import_comuni_from_csv(csv_path=None, progress_callback=None):

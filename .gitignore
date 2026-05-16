@@ -1,1 +1,49 @@
-Nothing needs to be added to .gitignore since only a Python source file (`database.py`) was modified and there are no build artifacts, dependencies, or temporary files in the changes.
+```gitignore
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.py~
+*.py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+.ENV/
+
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Logs
+*.log
+
+# Environment variables
+.env
+.env.local
+.env.*
+!.env.example
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build and distribution
+dist/
+build/
+*.egg-info/
+.coverage
+htmlcov/
+coverage.xml
+
+# OS generated files
+.DS_Store
+Thumbs.db
+```
