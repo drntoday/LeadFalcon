@@ -11,6 +11,13 @@ from email_validator import validate_email, EmailNotValidError
 import phonenumbers
 import database
 from urllib.parse import urlparse
+from datetime import datetime
+
+DEBUG = True
+
+def debug_print(msg):
+    if DEBUG:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
 PLANNER_PROMPT = """
 You are an expert lead-generation planner for Italian leather goods businesses. For the given city, generate a list of 20–30 search queries that will find retailers, boutiques, wholesalers, and artisans of leather bags, wallets, belts, and accessories. 
@@ -78,6 +85,7 @@ class LeadAgent(QObject):
         phone = phones[0] if phones else None
         lead_id = None
         score = lead_score if lead_score is not None else 70
+        debug_print(f"SAVE ORG: {business_name} | email={email} | phone={phone} | website={website}")
         try:
             cursor.execute(
                 "INSERT OR IGNORE INTO leads (record_type, business_name, email, phone, website, city, lead_score, role, linkedin_url) VALUES ('ORGANIZATION', ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -127,6 +135,8 @@ class LeadAgent(QObject):
         if self.groq_client is None:
             return []
         
+        debug_print(f"Calling Groq for city: {city_name}")
+        
         try:
             response = self.groq_client.chat.completions.create(
                 model="llama-3.1-70b-versatile",
@@ -138,6 +148,7 @@ class LeadAgent(QObject):
                 temperature=0.8
             )
             content = response.choices[0].message.content
+            debug_print(f"Groq raw response: {content[:200]}...")
             queries = json.loads(content)
             if not isinstance(queries, list):
                 self.status_updated.emit("Invalid plan format: not a list")
@@ -152,6 +163,7 @@ class LeadAgent(QObject):
         cursor.execute("UPDATE cities SET plan = ? WHERE id = ?", (json.dumps(queries), city_id))
         conn.commit()
         conn.close()
+        debug_print(f"Parsed queries: {queries[:3]}... (total {len(queries)})")
         print(f"[_generate_and_store_plan] Queries generated: {len(queries)}, First 3: {queries[:3]}")
         return queries
 
@@ -162,6 +174,7 @@ class LeadAgent(QObject):
         cursor.execute("SELECT id, name, region, plan FROM cities WHERE status = 'pending' ORDER BY id")
         rows = cursor.fetchall()
         conn.close()
+        debug_print(f"Pending cities in DB: {len(rows)}")
 
         if not rows:
             self.status_updated.emit("No pending cities.")
@@ -294,6 +307,7 @@ class LeadAgent(QObject):
             if leads_count_for_city == 0:
                 self.status_updated.emit(f"Zero leads found for {city_name}. Performing last-ditch fallback search...")
                 fallback_query = f"pelletteria {city_name}"
+                debug_print(f"FALLBACK search for {city_name}: '{fallback_query}'")
                 print(f"[run] Fallback query: {fallback_query}")
                 fallback_results = self.search_web(fallback_query, max_results=5)
                 
@@ -325,6 +339,7 @@ class LeadAgent(QObject):
             row_final = cursor_final.fetchone()
             leads_count_for_city = row_final[0] if row_final else 0
             conn_final.close()
+            debug_print(f"CITY COMPLETE: {city_name} → {leads_count_for_city} leads saved in DB")
             print(f"[city] {city_name}: total leads found = {leads_count_for_city}")
             
             # Mark city done
@@ -362,6 +377,9 @@ class LeadAgent(QObject):
         except Exception as e:
             self.status_updated.emit(f"Search error: {e}")
             return []
+        debug_print(f"SEARCH: '{query}' → returned {len(results)} results")
+        if len(results) > 0:
+            debug_print(f"First result: {results[0]['title'][:80]} | {results[0]['url'][:80]}")
         print(f"[search_web] Query: {query}, Results: {len(results)}")
         if len(results) == 0:
             print(f"[search_web] Warning: No results returned for query '{query}'")
@@ -372,6 +390,7 @@ class LeadAgent(QObject):
         self.status_updated.emit(f"Fetching: {url}")
         try:
             response = requests.get(url, impersonate="chrome", timeout=10)
+            debug_print(f"FETCH: {url} → status {response.status_code}")
             print(f"[fetch_url] URL: {url}, Status: {response.status_code}")
             if response.status_code == 200:
                 return response.text
@@ -379,6 +398,7 @@ class LeadAgent(QObject):
                 self.status_updated.emit(f"Warning: Received status code {response.status_code}")
                 return None
         except Exception as e:
+            debug_print(f"FETCH: {url} → status ERROR")
             self.status_updated.emit(f"Error fetching URL: {e}")
             return None
         finally:
@@ -429,11 +449,17 @@ class LeadAgent(QObject):
     def extract_contacts_from_page(self, url):
         html = self.fetch_url(url)
         if html is None:
+            debug_print(f"EXTRACT from {url}: emails=0, phones=0")
             print(f"[extract_contacts_from_page] URL: {url}, No contacts found (fetch failed)")
             return {"emails": [], "phones": []}
         contacts = self.extract_contacts_from_text(html)
         emails = contacts.get('emails', [])
         phones = contacts.get('phones', [])
+        debug_print(f"EXTRACT from {url}: emails={len(emails)}, phones={len(phones)}")
+        if emails:
+            debug_print(f"  Sample email: {emails[0]}")
+        if phones:
+            debug_print(f"  Sample phone: {phones[0]}")
         if emails or phones:
             print(f"[extract_contacts_from_page] URL: {url}, Emails: {emails}, Phones: {phones}")
         else:
