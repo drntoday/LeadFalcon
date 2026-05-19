@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QStatusBar,
     QFileDialog,
     QMessageBox,
-    QAction,
     QLabel,
     QDialog,
     QLineEdit,
@@ -26,7 +25,7 @@ from PySide6.QtWidgets import (
     QProgressBar
 )
 from PySide6.QtCore import QThread
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QIcon, QAction
 
 from agent import OSMAgent
 
