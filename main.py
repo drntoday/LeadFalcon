@@ -305,6 +305,21 @@ if __name__ == "__main__":
     import database
     app = QApplication(sys.argv)
     database.initialize_db()
+    
+    # Check if cities table is empty and comuni.csv exists
+    cities = database.get_cities()
+    if not cities and os.path.exists(database.CSV_PATH):
+        # File exists but no cities loaded (empty or malformed)
+        pass  # Let the app start, user will see no data
+    elif not cities and not os.path.exists(database.CSV_PATH):
+        # File doesn't exist - show message to user
+        from PySide6.QtWidgets import QMessageBox
+        msg_box = QMessageBox()
+        msg_box.setIcon(QMessageBox.Warning)
+        msg_box.setWindowTitle("Missing Data")
+        msg_box.setText("comuni.csv not found – please run generate_cities.py first")
+        msg_box.exec()
+    
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
