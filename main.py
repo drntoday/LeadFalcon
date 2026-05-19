@@ -16,7 +16,8 @@ from PySide6.QtWidgets import (
     QStatusBar,
     QFileDialog,
     QMessageBox,
-    QAction
+    QAction,
+    QLabel
 )
 from PySide6.QtCore import QThread
 
@@ -69,6 +70,10 @@ class MainWindow(QMainWindow):
         
         layout.addWidget(self.table_widget)
         
+        # Progress label for lead counter
+        self.progress_label = QLabel("Leads: 0")
+        layout.addWidget(self.progress_label)
+        
         # Status bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
@@ -77,6 +82,9 @@ class MainWindow(QMainWindow):
         # Keep references to thread and agent
         self.thread = None
         self.agent = None
+        
+        # Lead counter
+        self.lead_count = 0
 
     def on_lead_found(self, lead: dict):
         """Add a new lead to the table."""
@@ -92,6 +100,10 @@ class MainWindow(QMainWindow):
         self.table_widget.setItem(row_position, 6, QTableWidgetItem(lead.get("source", "")))
         
         self.table_widget.scrollToBottom()
+        
+        # Update lead counter
+        self.lead_count += 1
+        self.progress_label.setText(f"Leads: {self.lead_count}")
 
     def on_start(self):
         """Start the agent in a new thread."""
