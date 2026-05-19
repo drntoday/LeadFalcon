@@ -82,6 +82,12 @@ class SettingsDialog(QDialog):
         self.scala_key_input.setPlaceholderText("Optional – free key from get-scala.com")
         layout.addRow("SCALA API Key:", self.scala_key_input)
         
+        # Serper API Key field
+        self.serper_key_input = QLineEdit()
+        self.serper_key_input.setEchoMode(QLineEdit.Password)
+        self.serper_key_input.setPlaceholderText("Free key from serper.dev")
+        layout.addRow("Serper API Key:", self.serper_key_input)
+        
         # Dialog buttons
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         button_box.accepted.connect(self.accept)
@@ -97,6 +103,7 @@ class SettingsDialog(QDialog):
             self.yelp_key_input.setText(current_settings.get('yelp_key', ''))
             self.openapi_key_input.setText(current_settings.get('openapi_key', ''))
             self.scala_key_input.setText(current_settings.get('scala_key', ''))
+            self.serper_key_input.setText(current_settings.get('serper_key', ''))
     
     def get_settings(self):
         """Return the settings as a dict."""
@@ -107,7 +114,8 @@ class SettingsDialog(QDialog):
             'use_groq': self.use_groq_checkbox.isChecked(),
             'yelp_key': self.yelp_key_input.text(),
             'openapi_key': self.openapi_key_input.text(),
-            'scala_key': self.scala_key_input.text()
+            'scala_key': self.scala_key_input.text(),
+            'serper_key': self.serper_key_input.text()
         }
 
 
