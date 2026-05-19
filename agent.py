@@ -228,6 +228,51 @@ class OSMAgent(QObject):
         
         return results
 
+    def query_openapi_imprese(self, city: str) -> list[dict]:
+        """Query the official Italian business register API (Openapi Imprese)."""
+        headers = {"User-Agent": "LeadFalcon/1.0"}
+        results = []
+        
+        # First try with categoria=pelletteria
+        url_specific = f"https://openapi.it/v1/aziende?comune={city}&categoria=pelletteria&formato=json"
+        
+        try:
+            response = requests.get(url_specific, headers=headers, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+            
+            if isinstance(data, list) and len(data) > 0:
+                companies = data
+            else:
+                # Try broader search without category filter
+                url_broad = f"https://openapi.it/v1/aziende?comune={city}&formato=json"
+                response = requests.get(url_broad, headers=headers, timeout=15)
+                response.raise_for_status()
+                data = response.json()
+                companies = data if isinstance(data, list) else []
+            
+            for company in companies:
+                name = company.get("ragione_sociale") or company.get("denominazione")
+                
+                if not name:
+                    continue
+                
+                lead = {
+                    "name": name,
+                    "phone": company.get("telefono", ""),
+                    "email": company.get("email", ""),
+                    "website": company.get("sito_web") or company.get("url", ""),
+                    "city": city,
+                    "source": "openapi"
+                }
+                results.append(lead)
+                
+        except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}] OpenAPI error for {city}: {e}")
+            return []
+        
+        return results
+
     def _save_lead(self, lead: dict):
         """Save a lead to the database if it doesn't already exist."""
         conn = sqlite3.connect(self.db_path)
@@ -274,6 +319,11 @@ class OSMAgent(QObject):
                 print(f"[{time.strftime('%H:%M:%S')}] Overpass empty for {name}, trying web search...")
                 web_results = self.search_web_fallback(name)
                 print(f"[{time.strftime('%H:%M:%S')}] Web search found {len(web_results)} results for {name}")
+            
+            # Query OpenAPI Imprese to enrich results
+            time.sleep(2)  # Respect 2-second delay between API calls
+            openapi_results = self.query_openapi_imprese(name)
+            print(f"[{time.strftime('%H:%M:%S')}] OpenAPI found {len(openapi_results)} results for {name}")
             
             leads_saved_this_city = 0
             
@@ -326,10 +376,31 @@ class OSMAgent(QObject):
                 
                 time.sleep(random.uniform(0.5, 1.5))
             
-            if len(results) == 0 and len(web_results) == 0:
+            # Process OpenAPI results
+            for api_lead in openapi_results:
+                if self._stopped:
+                    break
+                self.wait_if_paused()
+                
+                lead = {
+                    "type": "ORGANIZATION",
+                    "name": api_lead["name"],
+                    "phone": api_lead.get("phone", ""),
+                    "email": api_lead.get("email", ""),
+                    "website": api_lead.get("website", ""),
+                    "city": name,
+                    "source": api_lead.get("source", "openapi")
+                }
+                
+                self._save_lead(lead)
+                leads_saved_this_city += 1
+                
+                time.sleep(random.uniform(0.5, 1.5))
+            
+            if len(results) == 0 and len(web_results) == 0 and len(openapi_results) == 0:
                 print(f"[{time.strftime('%H:%M:%S')}] No leads found in {name}")
             
-            print(f"[{time.strftime('%H:%M:%S')}] [{name}] Overpass: {len(results)}, Web: {len(web_results)}, Leads saved: {leads_saved_this_city}")
+            print(f"[{time.strftime('%H:%M:%S')}] [{name}] Overpass: {len(results)}, Web: {len(web_results)}, Openapi: {len(openapi_results)}, Total saved: {leads_saved_this_city}")
             
             time.sleep(3)
         
