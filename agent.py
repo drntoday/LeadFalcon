@@ -53,6 +53,7 @@ class OSMAgent(QObject):
         self.yelp_key = self.settings.get('yelp_key', '')
         self.openapi_key = self.settings.get('openapi_key', '')
         self.scala_key = self.settings.get('scala_key', '')
+        self.serper_key = self.settings.get('serper_key', '')
         self.margo_calls_today = 0
         self._stopped = False
         self._paused = False
@@ -252,6 +253,40 @@ class OSMAgent(QObject):
             return []
         
         return results
+
+    def search_serper(self, query: str) -> list:
+        """Search Google via Serper.dev API."""
+        if not self.serper_key:
+            return []
+        
+        url = "https://google.serper.dev/search"
+        headers = {
+            "X-API-KEY": self.serper_key,
+            "Content-Type": "application/json"
+        }
+        payload = {"q": query, "gl": "it", "hl": "it", "num": 10}
+        
+        try:
+            response = requests.post(url, json=payload, headers=headers, timeout=10)
+            time.sleep(1)  # Respect 1-second delay between calls
+            
+            if response.status_code == 200:
+                data = response.json()
+                organic_results = data.get("organic", [])
+                results = []
+                for item in organic_results:
+                    results.append({
+                        "title": item.get("title", ""),
+                        "url": item.get("link", ""),
+                        "snippet": item.get("snippet", "")
+                    })
+                return results
+            else:
+                print(f"[{time.strftime('%H:%M:%S')}] Serper API error: status {response.status_code}")
+                return []
+        except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}] Serper search error: {e}")
+            return []
 
     def query_openapi_imprese(self, city: str) -> list[dict]:
         """Query the official Italian business register API (Openapi Imprese)."""
@@ -761,6 +796,16 @@ class OSMAgent(QObject):
             openapi_results = self.query_openapi_imprese(name)
             print(f"[{time.strftime('%H:%M:%S')}] OpenAPI found {len(openapi_results)} results for {name}")
             
+            # 6. Serper fallback if fewer than 3 leads from previous sources
+            serper_results = []
+            total_leads_so_far = len(results) + len(bizdata_results) + len(yelp_results) + len(gleif_results) + len(web_results) + len(openapi_results)
+            if total_leads_so_far < 3 and self.serper_key:
+                self.status_updated.emit(f"Fewer than 3 leads for {name}, trying Serper search...")
+                print(f"[{time.strftime('%H:%M:%S')}] Fewer than 3 leads for {name}, trying Serper search...")
+                serper_query = f"pelletteria {name} telefono email"
+                serper_results = self.search_serper(serper_query)
+                print(f"[{time.strftime('%H:%M:%S')}] Serper found {len(serper_results)} results for {name}")
+            
             # Collect all raw leads from all sources into a single list
             all_leads = []
             
@@ -877,6 +922,36 @@ class OSMAgent(QObject):
                     "website": api_lead.get("website", ""),
                     "city": name,
                     "source": api_lead.get("source", "openapi")
+                }
+                
+                all_leads.append(lead)
+            
+            # Process Serper results
+            for serper_item in serper_results:
+                if self._stopped:
+                    break
+                self.wait_if_paused()
+                
+                # Extract contacts from snippet
+                snippet_contacts = self.extract_contacts_from_text(serper_item['snippet'])
+                
+                # Also try to fetch the page
+                page_contacts = {}
+                if serper_item.get('url'):
+                    page_contacts = self.extract_contacts_from_page(serper_item['url'])
+                
+                # Merge contacts
+                emails = list(set(snippet_contacts.get('emails', []) + page_contacts.get('emails', [])))
+                phones = list(set(snippet_contacts.get('phones', []) + page_contacts.get('phones', [])))
+                
+                lead = {
+                    "type": "ORGANIZATION",
+                    "name": serper_item.get("title", ""),
+                    "phone": phones[0] if phones else "",
+                    "email": emails[0] if emails else "",
+                    "website": serper_item.get("url", ""),
+                    "city": name,
+                    "source": "serper"
                 }
                 
                 all_leads.append(lead)
