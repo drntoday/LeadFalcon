@@ -21,6 +21,22 @@ except ImportError:
     except ImportError:
         DDGS = None
 
+# ColdReach import with fallback
+try:
+    from coldreach import EmailFinder
+    COLDREACH_AVAILABLE = True
+except ImportError:
+    COLDREACH_AVAILABLE = False
+    EmailFinder = None
+
+# metaURL import with fallback
+try:
+    import metaurl
+    METAURL_AVAILABLE = True
+except ImportError:
+    METAURL_AVAILABLE = False
+    metaurl = None
+
 
 class OSMAgent(QObject):
     status_updated = Signal(str)
@@ -34,6 +50,9 @@ class OSMAgent(QObject):
         self.use_margo = self.settings.get('use_margo', False)
         self.groq_key = self.settings.get('groq_key', '')
         self.groq_client = groq.Client(api_key=self.groq_key) if self.groq_key else None
+        self.yelp_key = self.settings.get('yelp_key', '')
+        self.openapi_key = self.settings.get('openapi_key', '')
+        self.scala_key = self.settings.get('scala_key', '')
         self.margo_calls_today = 0
         self._stopped = False
         self._paused = False
@@ -279,6 +298,245 @@ class OSMAgent(QObject):
         
         return results
 
+    def query_bizdata(self, city: str, category: str = "leather") -> list[dict]:
+        """Query BizData API for businesses in Italy."""
+        url = f"https://bizdata-web.vercel.app/api/businesses?location={city}+Italy&category={category}&limit=200&radius_km=20"
+        headers = {"User-Agent": "LeadFalcon/1.0"}
+        results = []
+        
+        try:
+            response = requests.get(url, headers=headers, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            
+            businesses = data if isinstance(data, list) else data.get("businesses", [])
+            
+            for biz in businesses:
+                name = biz.get("name") or biz.get("business_name")
+                if not name:
+                    continue
+                
+                lead = {
+                    "name": name,
+                    "phone": biz.get("phone", ""),
+                    "website": biz.get("website", ""),
+                    "email": biz.get("email", ""),
+                    "address": biz.get("address", ""),
+                    "city": city,
+                    "source": "bizdata"
+                }
+                results.append(lead)
+                
+        except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}] BizData error for {city}: {e}")
+            return []
+        
+        return results
+
+    def query_yelp(self, city: str, category: str = "leather goods") -> list[dict]:
+        """Query Yelp Fusion API for businesses in Italy."""
+        if not self.yelp_key:
+            return []
+        
+        url = f"https://api.yelp.com/v3/businesses/search?term={category}&location={city}+Italy&limit=50"
+        headers = {"Authorization": f"Bearer {self.yelp_key}", "User-Agent": "LeadFalcon/1.0"}
+        results = []
+        
+        try:
+            response = requests.get(url, headers=headers, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+            
+            businesses = data.get("businesses", [])
+            
+            for biz in businesses:
+                name = biz.get("name")
+                if not name:
+                    continue
+                
+                phone = biz.get("phone", "")
+                # Format Yelp phone number if present
+                if phone and len(phone) > 4:
+                    phone = phone.replace("+", "").replace("-", "").replace(" ", "")
+                    phone = "+" + phone if not phone.startswith("+") else phone
+                
+                address_lines = biz.get("location", {}).get("address1", "")
+                city_from_yelp = biz.get("location", {}).get("city", "")
+                
+                lead = {
+                    "name": name,
+                    "phone": phone,
+                    "website": biz.get("url", ""),
+                    "address": address_lines,
+                    "city": city_from_yelp if city_from_yelp else city,
+                    "source": "yelp"
+                }
+                results.append(lead)
+                
+        except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}] Yelp error for {city}: {e}")
+            return []
+        
+        return results
+
+    def query_gleif(self, city: str) -> list[dict]:
+        """Query GLEIF API for company records in Italy by city."""
+        url = f"https://api.gleif.org/api/v1/lei-records?filter[entity.legalAddress.city]={city}&filter[entity.legalAddress.country]=IT&page[size]=200"
+        headers = {"User-Agent": "LeadFalcon/1.0"}
+        results = []
+        
+        try:
+            response = requests.get(url, headers=headers, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            
+            records = data.get("data", [])
+            
+            for record in records:
+                attributes = record.get("attributes", {})
+                entity = attributes.get("entity", {})
+                legal_address = entity.get("legalAddress", {})
+                
+                company_name = ""
+                if "legalName" in entity:
+                    legal_name = entity["legalName"]
+                    company_name = legal_name.get("name", "") if isinstance(legal_name, dict) else str(legal_name)
+                
+                if not company_name:
+                    continue
+                
+                street = legal_address.get("addressLines", [""])[0] if legal_address.get("addressLines") else legal_address.get("street", "")
+                region = legal_address.get("region", "")
+                
+                # Extract registration authority ID (VAT-like)
+                validated_reg_auth_id = ""
+                registration = attributes.get("registration", {})
+                if registration:
+                    validated_reg_auth_id = registration.get("validatedRegistrationAuthorityID", "")
+                
+                lead = {
+                    "name": company_name,
+                    "phone": "",
+                    "email": "",
+                    "website": "",
+                    "address": street,
+                    "city": city,
+                    "region": region,
+                    "vat_like_id": validated_reg_auth_id,
+                    "source": "gleif"
+                }
+                results.append(lead)
+                
+        except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}] GLEIF error for {city}: {e}")
+            return []
+        
+        return results
+
+    def query_openregistry(self, company_name: str) -> dict:
+        """Query OpenAPI free search for company details by name."""
+        if not self.openapi_key:
+            return {}
+        
+        import urllib.parse
+        encoded_name = urllib.parse.quote(company_name)
+        url = f"https://api.openapi.com/v1/aziende?denominazione={encoded_name}"
+        headers = {"X-API-Key": self.openapi_key, "User-Agent": "LeadFalcon/1.0"}
+        
+        try:
+            response = requests.get(url, headers=headers, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+            
+            companies = data if isinstance(data, list) else data.get("aziende", [])
+            
+            if companies:
+                company = companies[0]
+                return {
+                    "ragione_sociale": company.get("ragione_sociale", ""),
+                    "telefono": company.get("telefono", ""),
+                    "email": company.get("email", ""),
+                    "sito_web": company.get("sito_web", ""),
+                    "indirizzo": company.get("indirizzo", ""),
+                    "source": "openapi"
+                }
+        except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}] OpenRegistry error for {company_name}: {e}")
+        
+        return {}
+
+    def query_scala(self, vat_number: str) -> dict:
+        """Query S.C.A.L.A. Score API for company info by VAT number."""
+        if not self.scala_key:
+            return {}
+        
+        url = f"https://api.get-scala.com/score/v1/company/{vat_number}"
+        headers = {"X-API-Key": self.scala_key, "User-Agent": "LeadFalcon/1.0"}
+        
+        try:
+            response = requests.get(url, headers=headers, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+            
+            return {
+                "company_name": data.get("company_name", ""),
+                "registered_address": data.get("registered_address", {}),
+                "employees_range": data.get("employees_range", ""),
+                "revenue": data.get("revenue", ""),
+                "ateco_description": data.get("ateco_description", ""),
+                "source": "scala"
+            }
+        except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}] SCALA error for VAT {vat_number}: {e}")
+        
+        return {}
+
+    def find_emails_coldreach(self, domain: str, first_name: str = "", last_name: str = "") -> list[str]:
+        """Find emails using ColdReach library or fallback regex extraction."""
+        if COLDREACH_AVAILABLE and EmailFinder:
+            try:
+                finder = EmailFinder(domain)
+                result = finder.find(first_name=first_name, last_name=last_name)
+                if result and result.get("email"):
+                    return [result["email"]]
+            except Exception as e:
+                print(f"[{time.strftime('%H:%M:%S')}] ColdReach error for {domain}: {e}")
+        
+        # Fallback: return empty list (email will be extracted from website via extract_contacts_from_page)
+        return []
+
+    def extract_social_profiles(self, url: str) -> dict:
+        """Extract social profiles and contacts using metaURL or fallback regex."""
+        result = {
+            "emails": [],
+            "phones": [],
+            "facebook": "",
+            "instagram": "",
+            "linkedin": "",
+            "twitter": ""
+        }
+        
+        if METAURL_AVAILABLE and metaurl:
+            try:
+                extracted = metaurl.extract(url)
+                if extracted:
+                    result["emails"] = extracted.get("emails", [])
+                    result["phones"] = extracted.get("phones", [])
+                    result["facebook"] = extracted.get("facebook", "")
+                    result["instagram"] = extracted.get("instagram", "")
+                    result["linkedin"] = extracted.get("linkedin", "")
+                    result["twitter"] = extracted.get("twitter", "")
+                    return result
+            except Exception as e:
+                print(f"[{time.strftime('%H:%M:%S')}] metaURL error for {url}: {e}")
+        
+        # Fallback: extract from page HTML using existing method
+        contacts = self.extract_contacts_from_page(url)
+        result["emails"] = contacts.get("emails", [])
+        result["phones"] = contacts.get("phones", [])
+        
+        return result
+
     def _enrich_with_margo(self, company_name: str, website: str) -> dict:
         """Enrich lead data using Margo API.
         
@@ -470,9 +728,27 @@ class OSMAgent(QObject):
             self.status_updated.emit(f"Processing: {name} ({region})")
             print(f"[{time.strftime('%H:%M:%S')}] Processing: {name} ({region})")
             
+            # 1. Query Overpass API
             results = self.query_overpass(name)
             print(f"[{time.strftime('%H:%M:%S')}] Overpass found {len(results)} businesses in {name}")
             
+            # 2. Query BizData API (2s delay between cities)
+            time.sleep(2)
+            bizdata_results = self.query_bizdata(name)
+            print(f"[{time.strftime('%H:%M:%S')}] BizData found {len(bizdata_results)} results for {name}")
+            
+            # 3. Query Yelp API (if key present, 1s delay)
+            yelp_results = []
+            if self.yelp_key:
+                time.sleep(1)
+                yelp_results = self.query_yelp(name)
+                print(f"[{time.strftime('%H:%M:%S')}] Yelp found {len(yelp_results)} results for {name}")
+            
+            # 4. Query GLEIF API (no delay needed)
+            gleif_results = self.query_gleif(name)
+            print(f"[{time.strftime('%H:%M:%S')}] GLEIF found {len(gleif_results)} results for {name}")
+            
+            # Web fallback if Overpass empty
             web_results = []
             if len(results) == 0:
                 self.status_updated.emit("Overpass empty, trying web search...")
@@ -480,12 +756,12 @@ class OSMAgent(QObject):
                 web_results = self.search_web_fallback(name)
                 print(f"[{time.strftime('%H:%M:%S')}] Web search found {len(web_results)} results for {name}")
             
-            # Query OpenAPI Imprese to enrich results
-            time.sleep(2)  # Respect 2-second delay between API calls
+            # 5. Query OpenAPI Imprese to enrich results (2s delay)
+            time.sleep(2)
             openapi_results = self.query_openapi_imprese(name)
             print(f"[{time.strftime('%H:%M:%S')}] OpenAPI found {len(openapi_results)} results for {name}")
             
-            # Collect all raw leads from Overpass, web, and Openapi into a single list
+            # Collect all raw leads from all sources into a single list
             all_leads = []
             
             # Process Overpass results
@@ -511,6 +787,62 @@ class OSMAgent(QObject):
                     if contacts.get("phones") and not lead["phone"]:
                         lead["phone"] = contacts["phones"][0]
                 
+                all_leads.append(lead)
+            
+            # Process BizData results
+            for biz in bizdata_results:
+                if self._stopped:
+                    break
+                self.wait_if_paused()
+                
+                lead = {
+                    "type": "ORGANIZATION",
+                    "name": biz.get("name", ""),
+                    "phone": biz.get("phone", ""),
+                    "email": biz.get("email", ""),
+                    "website": biz.get("website", ""),
+                    "address": biz.get("address", ""),
+                    "city": biz.get("city", name),
+                    "source": "bizdata"
+                }
+                all_leads.append(lead)
+            
+            # Process Yelp results
+            for biz in yelp_results:
+                if self._stopped:
+                    break
+                self.wait_if_paused()
+                
+                lead = {
+                    "type": "ORGANIZATION",
+                    "name": biz.get("name", ""),
+                    "phone": biz.get("phone", ""),
+                    "email": "",
+                    "website": biz.get("website", ""),
+                    "address": biz.get("address", ""),
+                    "city": biz.get("city", name),
+                    "source": "yelp"
+                }
+                all_leads.append(lead)
+            
+            # Process GLEIF results
+            for biz in gleif_results:
+                if self._stopped:
+                    break
+                self.wait_if_paused()
+                
+                lead = {
+                    "type": "ORGANIZATION",
+                    "name": biz.get("name", ""),
+                    "phone": "",
+                    "email": "",
+                    "website": "",
+                    "address": biz.get("address", ""),
+                    "city": name,
+                    "region": biz.get("region", ""),
+                    "vat_like_id": biz.get("vat_like_id", ""),
+                    "source": "gleif"
+                }
                 all_leads.append(lead)
             
             # Process web fallback results
@@ -549,10 +881,68 @@ class OSMAgent(QObject):
                 
                 all_leads.append(lead)
             
-            # Merge duplicates
+            # Merge duplicates by normalized name + city
             merged = self._merge_leads(all_leads)
             
-            # Score each merged lead
+            # Enrich leads missing phone/email using OpenRegistry, ColdReach, metaURL
+            enriched_count = 0
+            for lead in merged:
+                if self._stopped:
+                    break
+                self.wait_if_paused()
+                
+                needs_enrichment = not lead.get("phone") or not lead.get("email")
+                
+                # Try OpenRegistry enrichment for companies without phone/email
+                if needs_enrichment and self.openapi_key and lead.get("name"):
+                    time.sleep(2)  # Throttle OpenRegistry calls
+                    registry_data = self.query_openregistry(lead["name"])
+                    if registry_data:
+                        if registry_data.get("telefono") and not lead.get("phone"):
+                            lead["phone"] = registry_data["telefono"]
+                        if registry_data.get("email") and not lead.get("email"):
+                            lead["email"] = registry_data["email"]
+                        if registry_data.get("sito_web") and not lead.get("website"):
+                            lead["website"] = registry_data["sito_web"]
+                        enriched_count += 1
+                
+                # Try ColdReach for email finding if website exists but no email
+                if lead.get("website") and not lead.get("email"):
+                    try:
+                        from urllib.parse import urlparse
+                        domain = urlparse(lead["website"]).netloc.replace("www.", "")
+                        if domain:
+                            emails = self.find_emails_coldreach(domain)
+                            if emails:
+                                lead["email"] = emails[0]
+                                enriched_count += 1
+                    except Exception as e:
+                        print(f"[{time.strftime('%H:%M:%S')}] ColdReach domain parse error: {e}")
+                
+                # Try metaURL for social profiles and additional contacts
+                if lead.get("website"):
+                    social_data = self.extract_social_profiles(lead["website"])
+                    if social_data.get("emails") and not lead.get("email"):
+                        lead["email"] = social_data["emails"][0]
+                    if social_data.get("phones") and not lead.get("phone"):
+                        lead["phone"] = social_data["phones"][0]
+                    # Add social profile links if present
+                    social_links = []
+                    if social_data.get("facebook"):
+                        social_links.append(social_data["facebook"])
+                    if social_data.get("instagram"):
+                        social_links.append(social_data["instagram"])
+                    if social_data.get("linkedin"):
+                        social_links.append(social_data["linkedin"])
+                    if social_data.get("twitter"):
+                        social_links.append(social_data["twitter"])
+                    if social_links:
+                        lead["social_profiles"] = ", ".join(social_links)
+            
+            if enriched_count > 0:
+                print(f"[{time.strftime('%H:%M:%S')}] Enriched {enriched_count} leads for {name}")
+            
+            # Score each merged lead with Groq AI
             scored_leads = [self._score_lead(lead) for lead in merged]
             
             # Save only leads with score >= 40
@@ -565,7 +955,7 @@ class OSMAgent(QObject):
             # Emit progress with city name, leads found, total leads
             self.status_updated.emit(f"{name}: Raw={len(all_leads)}, Merged={len(merged)}, Saved={saved}")
             
-            if len(results) == 0 and len(web_results) == 0 and len(openapi_results) == 0:
+            if len(results) == 0 and len(web_results) == 0 and len(openapi_results) == 0 and len(bizdata_results) == 0:
                 print(f"[{time.strftime('%H:%M:%S')}] No leads found in {name}")
             
             print(f"[{time.strftime('%H:%M:%S')}] [{name}] Raw: {len(all_leads)}, Merged: {len(merged)}, Saved: {saved}")
