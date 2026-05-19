@@ -22,7 +22,8 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QCheckBox,
     QDialogButtonBox,
-    QFormLayout
+    QFormLayout,
+    QProgressBar
 )
 from PySide6.QtCore import QThread
 from PySide6.QtGui import QIcon
@@ -53,6 +54,16 @@ class SettingsDialog(QDialog):
         self.use_margo_checkbox = QCheckBox("Use Margo to enrich leads (20/day free)")
         layout.addRow(self.use_margo_checkbox)
         
+        # Groq API Key field
+        self.groq_key_input = QLineEdit()
+        self.groq_key_input.setEchoMode(QLineEdit.Password)
+        self.groq_key_input.setPlaceholderText("Optional – Groq API key for lead scoring")
+        layout.addRow("Groq API Key:", self.groq_key_input)
+        
+        # Use Groq checkbox
+        self.use_groq_checkbox = QCheckBox("Use Groq for lead scoring")
+        layout.addRow(self.use_groq_checkbox)
+        
         # Dialog buttons
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         button_box.accepted.connect(self.accept)
@@ -63,12 +74,16 @@ class SettingsDialog(QDialog):
         if current_settings:
             self.margo_key_input.setText(current_settings.get('margo_key', ''))
             self.use_margo_checkbox.setChecked(current_settings.get('use_margo', False))
+            self.groq_key_input.setText(current_settings.get('groq_key', ''))
+            self.use_groq_checkbox.setChecked(current_settings.get('use_groq', False))
     
     def get_settings(self):
         """Return the settings as a dict."""
         return {
             'margo_key': self.margo_key_input.text(),
-            'use_margo': self.use_margo_checkbox.isChecked()
+            'use_margo': self.use_margo_checkbox.isChecked(),
+            'groq_key': self.groq_key_input.text(),
+            'use_groq': self.use_groq_checkbox.isChecked()
         }
 
 
@@ -130,6 +145,12 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(QHeaderView.Stretch)
         
         layout.addWidget(self.table_widget)
+        
+        # Progress bar (indeterminate during active scraping)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMaximum(0)  # Indeterminate mode
+        self.progress_bar.hide()
+        layout.addWidget(self.progress_bar)
         
         # Progress label for lead counter
         self.progress_label = QLabel("Leads: 0")
@@ -194,6 +215,7 @@ class MainWindow(QMainWindow):
         # Update lead counter
         self.lead_count += 1
         self.progress_label.setText(f"Leads: {self.lead_count}")
+        self.status_bar.showMessage(f"Total leads: {self.lead_count}")
 
     def on_start(self):
         """Start the agent in a new thread."""
@@ -211,12 +233,21 @@ class MainWindow(QMainWindow):
         self.agent.finished.connect(self.thread.quit)
         self.agent.finished.connect(self.agent.deleteLater)
         self.thread.finished.connect(self.thread.deleteLater)
+        self.agent.finished.connect(self.on_agent_finished)
         
         self.agent.status_updated.connect(self.status_bar.showMessage)
         self.agent.lead_found.connect(self.on_lead_found)
         
+        # Show progress bar during scraping
+        self.progress_bar.show()
+        
         self.thread.start()
         self.status_bar.showMessage("Agent starting...")
+    
+    def on_agent_finished(self):
+        """Called when agent finishes processing."""
+        self.progress_bar.hide()
+        self.status_bar.showMessage(f"All cities processed. Total leads: {self.lead_count}")
 
     def on_pause(self):
         """Pause the agent."""

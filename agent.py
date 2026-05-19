@@ -8,6 +8,7 @@ import curl_cffi.requests as cffi_requests
 from email_validator import validate_email
 import phonenumbers
 from PySide6.QtCore import QObject, Signal, QThread
+import groq
 
 import database
 
@@ -31,6 +32,8 @@ class OSMAgent(QObject):
         self.settings = settings or {}
         self.margo_key = self.settings.get('margo_key', '')
         self.use_margo = self.settings.get('use_margo', False)
+        self.groq_key = self.settings.get('groq_key', '')
+        self.groq_client = groq.Client(api_key=self.groq_key) if self.groq_key else None
         self.margo_calls_today = 0
         self._stopped = False
         self._paused = False
@@ -343,16 +346,103 @@ class OSMAgent(QObject):
         
         conn.close()
 
+    def _score_lead(self, lead: dict) -> dict:
+        """Score a lead from 0-100 using Groq AI if available."""
+        if self.groq_client is None:
+            lead['score'] = 50
+            return lead
+        
+        try:
+            prompt = f"You are a lead quality analyst for Italian leather goods. Score this business from 0-100 based on how likely it is to be a genuine leather goods retailer, boutique, or wholesaler. Consider the name, phone presence, email presence, and website. Business: {json.dumps(lead)}. Return ONLY the integer score, nothing else."
+            
+            response = self.groq_client.chat.completions.create(
+                model="llama-3.1-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=10,
+                temperature=0.3
+            )
+            
+            score_text = response.choices[0].message.content.strip()
+            # Extract integer from response
+            import re as re_module
+            match = re_module.search(r'\d+', score_text)
+            if match:
+                score = int(match.group())
+            else:
+                score = 50
+        except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}] Groq scoring error: {e}")
+            score = 50
+        
+        lead['score'] = score
+        return lead
+
+    def _merge_leads(self, leads: list) -> list:
+        """Merge duplicate leads by normalized name + city."""
+        import string
+        
+        def normalize_key(lead):
+            name = lead.get('name', '').lower().strip()
+            city = lead.get('city', '').lower().strip()
+            # Remove punctuation
+            name = ''.join(c for c in name if c not in string.punctuation)
+            city = ''.join(c for c in city if c not in string.punctuation)
+            return f"{name}|{city}"
+        
+        groups = {}
+        for lead in leads:
+            key = normalize_key(lead)
+            if key not in groups:
+                groups[key] = []
+            groups[key].append(lead)
+        
+        merged = []
+        for key, group in groups.items():
+            # Merge leads in this group
+            names = [l.get('name', '') for l in group]
+            longest_name = max(names, key=len) if names else ''
+            
+            phones = set()
+            emails = set()
+            websites = []
+            sources = []
+            cities = set()
+            
+            for l in group:
+                if l.get('phone'):
+                    phones.add(l['phone'])
+                if l.get('email'):
+                    emails.add(l['email'])
+                if l.get('website') and l['website'] not in websites:
+                    websites.append(l['website'])
+                if l.get('source'):
+                    sources.append(l['source'])
+                if l.get('city'):
+                    cities.add(l['city'])
+            
+            merged_lead = {
+                'type': 'ORGANIZATION',
+                'name': longest_name,
+                'phone': ', '.join(list(phones)) if phones else '',
+                'email': ', '.join(list(emails)) if emails else '',
+                'website': websites[0] if websites else '',
+                'city': list(cities)[0] if cities else '',
+                'source': '+'.join(sources)
+            }
+            merged.append(merged_lead)
+        
+        return merged
+
     def _save_lead(self, lead: dict):
         """Save a lead to the database if it doesn't already exist."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         cursor.execute(
-            "INSERT OR IGNORE INTO leads (type, name, phone, email, website, city, source) VALUES (?,?,?,?,?,?,?)",
+            "INSERT OR IGNORE INTO leads (type, name, phone, email, website, city, source, score) VALUES (?,?,?,?,?,?,?,?)",
             (lead.get("type", ""), lead.get("name", ""), lead.get("phone", ""), 
              lead.get("email", ""), lead.get("website", ""), lead.get("city", ""), 
-             lead.get("source", ""))
+             lead.get("source", ""), lead.get("score", 50))
         )
         
         if cursor.rowcount > 0:
@@ -395,7 +485,8 @@ class OSMAgent(QObject):
             openapi_results = self.query_openapi_imprese(name)
             print(f"[{time.strftime('%H:%M:%S')}] OpenAPI found {len(openapi_results)} results for {name}")
             
-            leads_saved_this_city = 0
+            # Collect all raw leads from Overpass, web, and Openapi into a single list
+            all_leads = []
             
             # Process Overpass results
             for biz in results:
@@ -420,16 +511,7 @@ class OSMAgent(QObject):
                     if contacts.get("phones") and not lead["phone"]:
                         lead["phone"] = contacts["phones"][0]
                 
-                self._save_lead(lead)
-                leads_saved_this_city += 1
-                
-                # Enrich with Margo if no email and Margo is enabled
-                if self.use_margo and not lead.get("email"):
-                    enrichment = self._enrich_with_margo(lead["name"], lead.get("website", ""))
-                    if enrichment.get("email") or enrichment.get("phone"):
-                        self._update_lead_enrichment(lead, enrichment)
-                
-                time.sleep(random.uniform(0.5, 1.5))
+                all_leads.append(lead)
             
             # Process web fallback results
             for web_lead in web_results:
@@ -447,16 +529,7 @@ class OSMAgent(QObject):
                     "source": web_lead.get("source", "web")
                 }
                 
-                self._save_lead(lead)
-                leads_saved_this_city += 1
-                
-                # Enrich with Margo if no email and Margo is enabled
-                if self.use_margo and not lead.get("email"):
-                    enrichment = self._enrich_with_margo(lead["name"], lead.get("website", ""))
-                    if enrichment.get("email") or enrichment.get("phone"):
-                        self._update_lead_enrichment(lead, enrichment)
-                
-                time.sleep(random.uniform(0.5, 1.5))
+                all_leads.append(lead)
             
             # Process OpenAPI results
             for api_lead in openapi_results:
@@ -474,21 +547,28 @@ class OSMAgent(QObject):
                     "source": api_lead.get("source", "openapi")
                 }
                 
-                self._save_lead(lead)
-                leads_saved_this_city += 1
-                
-                # Enrich with Margo if no email and Margo is enabled
-                if self.use_margo and not lead.get("email"):
-                    enrichment = self._enrich_with_margo(lead["name"], lead.get("website", ""))
-                    if enrichment.get("email") or enrichment.get("phone"):
-                        self._update_lead_enrichment(lead, enrichment)
-                
-                time.sleep(random.uniform(0.5, 1.5))
+                all_leads.append(lead)
+            
+            # Merge duplicates
+            merged = self._merge_leads(all_leads)
+            
+            # Score each merged lead
+            scored_leads = [self._score_lead(lead) for lead in merged]
+            
+            # Save only leads with score >= 40
+            saved = 0
+            for lead in scored_leads:
+                if lead.get('score', 50) >= 40:
+                    self._save_lead(lead)
+                    saved += 1
+            
+            # Emit progress with city name, leads found, total leads
+            self.status_updated.emit(f"{name}: Raw={len(all_leads)}, Merged={len(merged)}, Saved={saved}")
             
             if len(results) == 0 and len(web_results) == 0 and len(openapi_results) == 0:
                 print(f"[{time.strftime('%H:%M:%S')}] No leads found in {name}")
             
-            print(f"[{time.strftime('%H:%M:%S')}] [{name}] Overpass: {len(results)}, Web: {len(web_results)}, Openapi: {len(openapi_results)}, Total saved: {leads_saved_this_city}")
+            print(f"[{time.strftime('%H:%M:%S')}] [{name}] Raw: {len(all_leads)}, Merged: {len(merged)}, Saved: {saved}")
             
             time.sleep(3)
         
