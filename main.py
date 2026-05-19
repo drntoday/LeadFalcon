@@ -193,7 +193,7 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("Ready")
         
         # Keep references to thread and agent
-        self.thread = None
+        self.agent_thread = None
         self.agent = None
         
         # Lead counter
@@ -250,35 +250,43 @@ class MainWindow(QMainWindow):
 
     def on_start(self):
         """Start the agent in a new thread."""
-        if self.thread is not None and self.thread.isRunning():
+        if self.agent_thread is not None and self.agent_thread.isRunning():
             self.status_bar.showMessage("Agent already running")
             return
         
-        self.thread = QThread()
+        self.agent_thread = QThread()
         self.agent = OSMAgent(settings=self.app_settings)
         
-        self.agent.moveToThread(self.thread)
+        self.agent.moveToThread(self.agent_thread)
         
         # Connect signals
-        self.thread.started.connect(self.agent.run)
-        self.agent.finished.connect(self.thread.quit)
-        self.agent.finished.connect(self.agent.deleteLater)
-        self.thread.finished.connect(self.thread.deleteLater)
+        self.agent_thread.started.connect(self.agent.run)
+        self.agent.finished.connect(self.agent_thread.quit)
         self.agent.finished.connect(self.on_agent_finished)
-        
-        self.agent.status_updated.connect(self.status_bar.showMessage)
+        self.agent.status_updated.connect(lambda msg: self.statusBar().showMessage(msg))
         self.agent.lead_found.connect(self.on_lead_found)
         
         # Show progress bar during scraping
         self.progress_bar.show()
         
-        self.thread.start()
+        self.agent_thread.start()
         self.status_bar.showMessage("Agent starting...")
     
     def on_agent_finished(self):
         """Called when agent finishes processing."""
         self.progress_bar.hide()
-        self.status_bar.showMessage(f"All cities processed. Total leads: {self.lead_count}")
+        self.status_bar.showMessage("Finished.")
+        
+        # Disconnect signals from agent to prevent dangling connections
+        self.agent.finished.disconnect()
+        self.agent.status_updated.disconnect()
+        self.agent.lead_found.disconnect()
+        
+        # Cleanup
+        self.agent.deleteLater()
+        self.agent_thread.deleteLater()
+        self.agent = None
+        self.agent_thread = None
 
     def on_pause(self):
         """Pause the agent."""
@@ -289,11 +297,9 @@ class MainWindow(QMainWindow):
         """Stop the agent and thread."""
         if self.agent:
             self.agent.stop()
-        if self.thread:
-            self.thread.quit()
-            self.thread.wait()
-            self.thread = None
-            self.agent = None
+        if self.agent_thread is not None and self.agent_thread.isRunning():
+            self.agent_thread.quit()
+            self.agent_thread.wait(5000)
         self.status_bar.showMessage("Agent stopped")
 
     def on_export(self):
@@ -330,6 +336,11 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Export Complete", f"Data exported to {file_path}")
         except Exception as e:
             QMessageBox.critical(self, "Export Error", f"Failed to export: {e}")
+
+    def closeEvent(self, event):
+        """Handle window close event."""
+        self.on_stop()
+        event.accept()
 
 
 if __name__ == "__main__":
