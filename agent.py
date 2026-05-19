@@ -29,6 +29,9 @@ class OSMAgent(QObject):
     def __init__(self, settings=None):
         super().__init__()
         self.settings = settings or {}
+        self.margo_key = self.settings.get('margo_key', '')
+        self.use_margo = self.settings.get('use_margo', False)
+        self.margo_calls_today = 0
         self._stopped = False
         self._paused = False
         self.db_path = database.DB_PATH
@@ -273,6 +276,73 @@ class OSMAgent(QObject):
         
         return results
 
+    def _enrich_with_margo(self, company_name: str, website: str) -> dict:
+        """Enrich lead data using Margo API.
+        
+        Returns dict with 'email' and 'phone' keys (empty strings if not found or on error).
+        """
+        if not self.use_margo or not self.margo_key:
+            return {"email": "", "phone": ""}
+        
+        if self.margo_calls_today >= 20:
+            self.status_updated.emit("Margo daily limit reached (20 calls). Stopping enrichment for this session.")
+            print(f"[{time.strftime('%H:%M:%S')}] Margo daily limit reached (20 calls). Stopping enrichment.")
+            return {"email": "", "phone": ""}
+        
+        try:
+            import urllib.parse
+            encoded_name = urllib.parse.quote(company_name)
+            encoded_website = urllib.parse.quote(website) if website else ""
+            url = f"https://api.margo.io/v1/company/enrich?name={encoded_name}&website={encoded_website}"
+            headers = {"X-API-Key": self.margo_key}
+            
+            response = requests.get(url, headers=headers, timeout=15)
+            self.margo_calls_today += 1
+            
+            if response.status_code == 200:
+                data = response.json()
+                email = data.get("email", "") or ""
+                phone = data.get("phone", "") or ""
+                return {"email": email, "phone": phone}
+            else:
+                print(f"[{time.strftime('%H:%M:%S')}] Margo API error: status {response.status_code}")
+                return {"email": "", "phone": ""}
+        except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}] Margo enrichment error: {e}")
+            return {"email": "", "phone": ""}
+
+    def _update_lead_enrichment(self, lead: dict, enrichment: dict):
+        """Update a lead in the database with enrichment data from Margo."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Update email and/or phone if enrichment provides them
+        updates = []
+        params = []
+        
+        if enrichment.get("email"):
+            updates.append("email = ?")
+            params.append(enrichment["email"])
+        if enrichment.get("phone"):
+            updates.append("phone = ?")
+            params.append(enrichment["phone"])
+        
+        if updates:
+            params.extend([lead.get("name", ""), lead.get("city", "")])
+            query = f"UPDATE leads SET {', '.join(updates)} WHERE name = ? AND city = ?"
+            cursor.execute(query, params)
+            conn.commit()
+            
+            # Emit updated lead
+            updated_lead = lead.copy()
+            if enrichment.get("email"):
+                updated_lead["email"] = enrichment["email"]
+            if enrichment.get("phone"):
+                updated_lead["phone"] = enrichment["phone"]
+            self.lead_found.emit(updated_lead)
+        
+        conn.close()
+
     def _save_lead(self, lead: dict):
         """Save a lead to the database if it doesn't already exist."""
         conn = sqlite3.connect(self.db_path)
@@ -353,6 +423,12 @@ class OSMAgent(QObject):
                 self._save_lead(lead)
                 leads_saved_this_city += 1
                 
+                # Enrich with Margo if no email and Margo is enabled
+                if self.use_margo and not lead.get("email"):
+                    enrichment = self._enrich_with_margo(lead["name"], lead.get("website", ""))
+                    if enrichment.get("email") or enrichment.get("phone"):
+                        self._update_lead_enrichment(lead, enrichment)
+                
                 time.sleep(random.uniform(0.5, 1.5))
             
             # Process web fallback results
@@ -374,6 +450,12 @@ class OSMAgent(QObject):
                 self._save_lead(lead)
                 leads_saved_this_city += 1
                 
+                # Enrich with Margo if no email and Margo is enabled
+                if self.use_margo and not lead.get("email"):
+                    enrichment = self._enrich_with_margo(lead["name"], lead.get("website", ""))
+                    if enrichment.get("email") or enrichment.get("phone"):
+                        self._update_lead_enrichment(lead, enrichment)
+                
                 time.sleep(random.uniform(0.5, 1.5))
             
             # Process OpenAPI results
@@ -394,6 +476,12 @@ class OSMAgent(QObject):
                 
                 self._save_lead(lead)
                 leads_saved_this_city += 1
+                
+                # Enrich with Margo if no email and Margo is enabled
+                if self.use_margo and not lead.get("email"):
+                    enrichment = self._enrich_with_margo(lead["name"], lead.get("website", ""))
+                    if enrichment.get("email") or enrichment.get("phone"):
+                        self._update_lead_enrichment(lead, enrichment)
                 
                 time.sleep(random.uniform(0.5, 1.5))
             
