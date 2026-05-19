@@ -64,6 +64,24 @@ class SettingsDialog(QDialog):
         self.use_groq_checkbox = QCheckBox("Use Groq for lead scoring")
         layout.addRow(self.use_groq_checkbox)
         
+        # Yelp API Key field
+        self.yelp_key_input = QLineEdit()
+        self.yelp_key_input.setEchoMode(QLineEdit.Password)
+        self.yelp_key_input.setPlaceholderText("Optional – free key from yelp.com/developers")
+        layout.addRow("Yelp API Key:", self.yelp_key_input)
+        
+        # Openapi API Key field
+        self.openapi_key_input = QLineEdit()
+        self.openapi_key_input.setEchoMode(QLineEdit.Password)
+        self.openapi_key_input.setPlaceholderText("Optional – free key from openapi.com")
+        layout.addRow("Openapi API Key:", self.openapi_key_input)
+        
+        # SCALA API Key field
+        self.scala_key_input = QLineEdit()
+        self.scala_key_input.setEchoMode(QLineEdit.Password)
+        self.scala_key_input.setPlaceholderText("Optional – free key from get-scala.com")
+        layout.addRow("SCALA API Key:", self.scala_key_input)
+        
         # Dialog buttons
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         button_box.accepted.connect(self.accept)
@@ -76,6 +94,9 @@ class SettingsDialog(QDialog):
             self.use_margo_checkbox.setChecked(current_settings.get('use_margo', False))
             self.groq_key_input.setText(current_settings.get('groq_key', ''))
             self.use_groq_checkbox.setChecked(current_settings.get('use_groq', False))
+            self.yelp_key_input.setText(current_settings.get('yelp_key', ''))
+            self.openapi_key_input.setText(current_settings.get('openapi_key', ''))
+            self.scala_key_input.setText(current_settings.get('scala_key', ''))
     
     def get_settings(self):
         """Return the settings as a dict."""
@@ -83,7 +104,10 @@ class SettingsDialog(QDialog):
             'margo_key': self.margo_key_input.text(),
             'use_margo': self.use_margo_checkbox.isChecked(),
             'groq_key': self.groq_key_input.text(),
-            'use_groq': self.use_groq_checkbox.isChecked()
+            'use_groq': self.use_groq_checkbox.isChecked(),
+            'yelp_key': self.yelp_key_input.text(),
+            'openapi_key': self.openapi_key_input.text(),
+            'scala_key': self.scala_key_input.text()
         }
 
 
