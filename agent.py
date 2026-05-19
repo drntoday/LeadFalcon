@@ -12,6 +12,7 @@ import phonenumbers
 import database
 from urllib.parse import urlparse
 from datetime import datetime
+from bs4 import BeautifulSoup
 
 DEBUG = True
 
@@ -187,8 +188,59 @@ class LeadAgent(QObject):
             self.wait_if_paused()
             city_id, city_name, region, plan_json = city_row
             self.status_updated.emit(f"Processing city: {city_name}")
+            debug_print(f"CITY PROGRESS: Starting {city_name} (region: {region})")
             
-            # Parse existing plan or generate new one
+            # FIRST: Scrape Pagine Gialle as primary lead source
+            debug_print(f"CITY PROGRESS: Calling scrape_pagine_gialle for {city_name}")
+            pg_businesses = self.scrape_pagine_gialle(city_name, keyword="pelletteria")
+            debug_print(f"PAGINE GIALLE RESULTS: Found {len(pg_businesses)} businesses on Pagine Gialle for {city_name}")
+            
+            # Save each business found on Pagine Gialle
+            for biz in pg_businesses:
+                if self._stopped:
+                    break
+                self.wait_if_paused()
+                lead_id = self._save_organization_lead(
+                    city=city_name,
+                    business_name=biz.get("name", ""),
+                    website=biz.get("website", ""),
+                    emails=[],
+                    phones=[biz.get("phone", "")] if biz.get("phone") else []
+                )
+                if lead_id and biz.get("website"):
+                    domain = self._extract_domain(biz["website"])
+                    if domain:
+                        self._discover_employees(domain, lead_id)
+                time.sleep(random.uniform(0.5, 1.5))
+            
+            # Fallback for small towns: if Pagine Gialle returns 0 results, try Google Maps via DuckDuckGo
+            if len(pg_businesses) == 0:
+                debug_print(f"FALLBACK: Pagine Gialle returned 0 results for {city_name}, trying Google Maps search")
+                maps_query = f'site:google.com/maps "pelletteria {city_name}"'
+                debug_print(f"FALLBACK search query: {maps_query}")
+                maps_results = self.search_web(maps_query, max_results=5)
+                for result in maps_results[:5]:
+                    if self._stopped:
+                        break
+                    self.wait_if_paused()
+                    contacts = self.extract_contacts_from_page(result['url'])
+                    if contacts.get('emails') or contacts.get('phones'):
+                        business_name = result.get('title', '')
+                        website = result.get('url', '')
+                        lead_id = self._save_organization_lead(
+                            city=city_name,
+                            business_name=business_name,
+                            website=website,
+                            emails=contacts.get('emails', []),
+                            phones=contacts.get('phones', [])
+                        )
+                        if lead_id and website:
+                            domain = self._extract_domain(website)
+                            if domain:
+                                self._discover_employees(domain, lead_id)
+                    time.sleep(random.uniform(1, 3))
+            
+            # Parse existing plan or generate new one (secondary source, runs after Pagine Gialle)
             queries = []
             if plan_json:
                 try:
@@ -465,6 +517,107 @@ class LeadAgent(QObject):
         else:
             print(f"[extract_contacts_from_page] URL: {url}, No contacts found")
         return contacts
+
+
+    def scrape_pagine_gialle(self, city_name, keyword="pelletteria"):
+        """Scrape Pagine Gialle for businesses in a given city."""
+        debug_print(f"PAGINE GIALLE: Searching for '{keyword}' in {city_name}")
+        url = f"https://www.paginegialle.it/ricerca/{keyword}/{city_name}"
+        
+        try:
+            response = requests.get(url, impersonate="chrome", timeout=15)
+            debug_print(f"PAGINE GIALLE: URL {url} → status {response.status_code}")
+            
+            # Check for CAPTCHA or error
+            if response.status_code != 200:
+                debug_print(f"PAGINE GIALLE: Error - status code {response.status_code}")
+                return []
+            
+            # Check for CAPTCHA indicators in content
+            if "captcha" in response.text.lower() or "verifica" in response.text.lower():
+                debug_print(f"PAGINE GIALLE: CAPTCHA detected, returning empty list")
+                return []
+            
+            time.sleep(3)  # 3-second sleep after request
+            
+            soup = BeautifulSoup(response.text, 'html.parser')
+            businesses = []
+            
+            # Try to find listings using various common patterns
+            # Look for elements with class containing "listing", "result", or structured data
+            listing_containers = soup.find_all(class_=lambda x: x and any(word in x.lower() for word in ['listing', 'result', 'business', 'azienda']))
+            
+            # If no specific containers found, try finding all h2/h3 tags which often contain business names
+            if not listing_containers:
+                listing_containers = soup.find_all(['h2', 'h3'])
+            
+            for container in listing_containers:
+                try:
+                    biz_data = {"name": "", "phone": "", "address": "", "website": ""}
+                    
+                    # Extract business name from h2/h3 tags or title attributes
+                    name_elem = container.find(['h2', 'h3', 'a'], class_=lambda x: x and any(word in x.lower() for word in ['title', 'name', 'business']))
+                    if name_elem:
+                        biz_data["name"] = name_elem.get_text(strip=True)
+                    else:
+                        # Try title attribute
+                        title_attr = container.get('title', '')
+                        if title_attr:
+                            biz_data["name"] = title_attr
+                        else:
+                            # Try direct text content
+                            biz_data["name"] = container.get_text(strip=True)[:100]
+                    
+                    if not biz_data["name"]:
+                        continue
+                    
+                    # Extract phone number - look for tel: links or phone icon near text
+                    phone_link = container.find('a', href=lambda x: x and x.startswith('tel:'))
+                    if phone_link:
+                        biz_data["phone"] = phone_link['href'].replace('tel:', '').strip()
+                    else:
+                        # Look for phone number patterns near phone icons
+                        phone_icon = container.find(class_=lambda x: x and 'phone' in x.lower())
+                        if phone_icon:
+                            biz_data["phone"] = phone_icon.get_text(strip=True)
+                    
+                    # Extract address - look for structured address text
+                    addr_elem = container.find(class_=lambda x: x and any(word in x.lower() for word in ['address', 'indirizzo', 'via', 'street']))
+                    if addr_elem:
+                        biz_data["address"] = addr_elem.get_text(strip=True)
+                    else:
+                        # Try to find address-like text (often contains Via, street numbers)
+                        addr_match = re.search(r'(Via|Viale|Piazza|Corso)\s+[A-Za-z0-9\s]+,\s*\d+', container.get_text(), re.IGNORECASE)
+                        if addr_match:
+                            biz_data["address"] = addr_match.group(0)
+                    
+                    # Extract website URL - look for "Visita il sito" link
+                    website_link = container.find('a', href=lambda x: x and ('visita' in x.lower() or 'sito' in x.lower() or 'website' in x.lower()))
+                    if website_link:
+                        biz_data["website"] = website_link['href']
+                    else:
+                        # Look for external links that might be websites
+                        for link in container.find_all('a', href=True):
+                            href = link['href']
+                            if 'http' in href and 'paginegialle' not in href:
+                                biz_data["website"] = href
+                                break
+                    
+                    # Only add if we have at least a name
+                    if biz_data["name"]:
+                        businesses.append(biz_data)
+                        debug_print(f"  Found: {biz_data['name'][:50]} | phone={biz_data['phone'][:20] if biz_data['phone'] else 'N/A'}")
+                
+                except Exception as e:
+                    debug_print(f"PAGINE GIALLE: Error parsing listing: {e}")
+                    continue
+            
+            debug_print(f"PAGINE GIALLE: Found {len(businesses)} businesses in {city_name}")
+            return businesses
+            
+        except Exception as e:
+            debug_print(f"PAGINE GIALLE: Exception occurred: {e}")
+            return []
 
 
     def _save_person_lead(self, org_lead_id, email, domain, person_full_name=None, role=None, linkedin_url=None):
