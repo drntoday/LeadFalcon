@@ -24,6 +24,13 @@ def initialize_db():
         )
     """)
     
+    # Add score column if it doesn't exist
+    try:
+        cursor.execute("ALTER TABLE leads ADD COLUMN score INTEGER DEFAULT 50")
+    except sqlite3.OperationalError:
+        # Column already exists
+        pass
+    
     cursor.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_email ON leads(email) WHERE email IS NOT NULL
     """)
