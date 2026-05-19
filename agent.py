@@ -11,6 +11,15 @@ from PySide6.QtCore import QObject, Signal, QThread
 
 import database
 
+# DDGS import with fallback
+try:
+    from ddgs import DDGS
+except ImportError:
+    try:
+        from duckduckgo_search import DDGS
+    except ImportError:
+        DDGS = None
+
 
 class OSMAgent(QObject):
     status_updated = Signal(str)
@@ -59,8 +68,9 @@ class OSMAgent(QObject):
                 lat = float(data[0]["lat"])
                 lon = float(data[0]["lon"])
                 return (lat, lon)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}] Geocode error for {city}: {e}")
+            return (None, None)
         
         time.sleep(1)
         return (None, None)
@@ -107,6 +117,7 @@ class OSMAgent(QObject):
             
             return results
         except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}] Overpass error for {city}: {e}")
             self.status_updated.emit(f"Overpass query failed: {e}")
             return []
         finally:
@@ -147,6 +158,76 @@ class OSMAgent(QObject):
         except Exception:
             return {}
 
+    def extract_contacts_from_text(self, text: str) -> dict:
+        """Extract emails and Italian phone numbers from a text string."""
+        # Extract and validate emails
+        email_pattern = r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}'
+        raw_emails = re.findall(email_pattern, text)
+        valid_emails = set()
+        
+        for email in raw_emails:
+            try:
+                validated = validate_email(email)
+                valid_emails.add(validated.email)
+            except Exception:
+                continue
+        
+        # Extract Italian phone numbers
+        phones = set()
+        for match in phonenumbers.PhoneNumberMatcher(text, "IT"):
+            try:
+                e164 = phonenumbers.format_number(match.number, phonenumbers.PhoneNumberFormat.E164)
+                phones.add(e164)
+            except Exception:
+                continue
+        
+        return {"emails": list(valid_emails), "phones": list(phones)}
+
+    def search_web_fallback(self, city: str, keyword: str = "pelletteria") -> list:
+        """Search the web for businesses when Overpass returns empty results."""
+        if DDGS is None:
+            print(f"[{time.strftime('%H:%M:%S')}] DDGS not available, skipping web search for {city}")
+            return []
+        
+        query = f"{keyword} {city} contatti telefono email"
+        results = []
+        
+        try:
+            with DDGS() as ddgs:
+                search_results = ddgs.text(query, max_results=10)
+                
+                for result in search_results:
+                    title = result.get("title", "")
+                    snippet = result.get("body", "")
+                    url = result.get("href", "")
+                    
+                    # Extract contacts from snippet
+                    contacts = self.extract_contacts_from_text(snippet)
+                    
+                    # Also try to fetch the page
+                    if url:
+                        page_contacts = self.extract_contacts_from_page(url)
+                        # Merge results
+                        if page_contacts.get("emails"):
+                            contacts["emails"] = list(set(contacts.get("emails", []) + page_contacts["emails"]))
+                        if page_contacts.get("phones"):
+                            contacts["phones"] = list(set(contacts.get("phones", []) + page_contacts["phones"]))
+                    
+                    lead = {
+                        "name": title,
+                        "phone": contacts["phones"][0] if contacts.get("phones") else "",
+                        "email": contacts["emails"][0] if contacts.get("emails") else "",
+                        "website": url,
+                        "source": "web"
+                    }
+                    results.append(lead)
+                    
+        except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}] Web search error for {city}: {e}")
+            return []
+        
+        return results
+
     def _save_lead(self, lead: dict):
         """Save a lead to the database if it doesn't already exist."""
         conn = sqlite3.connect(self.db_path)
@@ -182,10 +263,21 @@ class OSMAgent(QObject):
             self.wait_if_paused()
             
             self.status_updated.emit(f"Processing: {name} ({region})")
+            print(f"[{time.strftime('%H:%M:%S')}] Processing: {name} ({region})")
             
             results = self.query_overpass(name)
-            self.status_updated.emit(f"Found {len(results)} businesses in {name}")
+            print(f"[{time.strftime('%H:%M:%S')}] Overpass found {len(results)} businesses in {name}")
             
+            web_results = []
+            if len(results) == 0:
+                self.status_updated.emit("Overpass empty, trying web search...")
+                print(f"[{time.strftime('%H:%M:%S')}] Overpass empty for {name}, trying web search...")
+                web_results = self.search_web_fallback(name)
+                print(f"[{time.strftime('%H:%M:%S')}] Web search found {len(web_results)} results for {name}")
+            
+            leads_saved_this_city = 0
+            
+            # Process Overpass results
             for biz in results:
                 if self._stopped:
                     break
@@ -209,8 +301,35 @@ class OSMAgent(QObject):
                         lead["phone"] = contacts["phones"][0]
                 
                 self._save_lead(lead)
+                leads_saved_this_city += 1
                 
                 time.sleep(random.uniform(0.5, 1.5))
+            
+            # Process web fallback results
+            for web_lead in web_results:
+                if self._stopped:
+                    break
+                self.wait_if_paused()
+                
+                lead = {
+                    "type": "ORGANIZATION",
+                    "name": web_lead["name"],
+                    "phone": web_lead.get("phone", ""),
+                    "email": web_lead.get("email", ""),
+                    "website": web_lead.get("website", ""),
+                    "city": name,
+                    "source": web_lead.get("source", "web")
+                }
+                
+                self._save_lead(lead)
+                leads_saved_this_city += 1
+                
+                time.sleep(random.uniform(0.5, 1.5))
+            
+            if len(results) == 0 and len(web_results) == 0:
+                print(f"[{time.strftime('%H:%M:%S')}] No leads found in {name}")
+            
+            print(f"[{time.strftime('%H:%M:%S')}] [{name}] Overpass: {len(results)}, Web: {len(web_results)}, Leads saved: {leads_saved_this_city}")
             
             time.sleep(3)
         
