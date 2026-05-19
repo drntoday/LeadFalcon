@@ -10,9 +10,11 @@ import re
 from email_validator import validate_email, EmailNotValidError
 import phonenumbers
 import database
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 from datetime import datetime
 from bs4 import BeautifulSoup
+import warnings
+warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 DEBUG = True
 
@@ -191,6 +193,7 @@ class LeadAgent(QObject):
             debug_print(f"CITY PROGRESS: Starting {city_name} (region: {region})")
             
             # FIRST: Scrape Pagine Gialle as primary lead source
+            keyword = "pelletteria"
             debug_print(f"CITY PROGRESS: Calling scrape_pagine_gialle for {city_name}")
             pg_businesses = self.scrape_pagine_gialle(city_name, keyword="pelletteria")
             debug_print(f"PAGINE GIALLE RESULTS: Found {len(pg_businesses)} businesses on Pagine Gialle for {city_name}")
@@ -213,13 +216,16 @@ class LeadAgent(QObject):
                         self._discover_employees(domain, lead_id)
                 time.sleep(random.uniform(0.5, 1.5))
             
-            # Fallback for small towns: if Pagine Gialle returns 0 results, try Google Maps via DuckDuckGo
+            # Fallback for small towns: if Pagine Gialle returns 0 results, try broader web search
+            fallback_found_any = False
             if len(pg_businesses) == 0:
-                debug_print(f"FALLBACK: Pagine Gialle returned 0 results for {city_name}, trying Google Maps search")
-                maps_query = f'site:google.com/maps "pelletteria {city_name}"'
-                debug_print(f"FALLBACK search query: {maps_query}")
-                maps_results = self.search_web(maps_query, max_results=5)
-                for result in maps_results[:5]:
+                debug_print(f"FALLBACK: Pagine Gialle returned 0 results for {city_name}, trying broader web search")
+                # First fallback: general DuckDuckGo search for leather goods
+                fallback_query = f"{keyword} {city_name} contatti telefono email"
+                debug_print(f"FALLBACK search query: {fallback_query}")
+                fallback_results = self.search_web(fallback_query, max_results=10)
+                
+                for result in fallback_results[:10]:
                     if self._stopped:
                         break
                     self.wait_if_paused()
@@ -238,7 +244,54 @@ class LeadAgent(QObject):
                             domain = self._extract_domain(website)
                             if domain:
                                 self._discover_employees(domain, lead_id)
+                        fallback_found_any = True
                     time.sleep(random.uniform(1, 3))
+                
+                # Second fallback: if still zero results, try general retail shops
+                if not fallback_found_any:
+                    debug_print(f"FALLBACK 2: Zero results from first fallback, trying general retail search")
+                    retail_query = f"negozio abbigliamento {city_name} telefono"
+                    debug_print(f"FALLBACK 2 search query: {retail_query}")
+                    retail_results = self.search_web(retail_query, max_results=10)
+                    
+                    for result in retail_results[:10]:
+                        if self._stopped:
+                            break
+                        self.wait_if_paused()
+                        contacts = self.extract_contacts_from_page(result['url'])
+                        if contacts.get('emails') or contacts.get('phones'):
+                            business_name = result.get('title', '')
+                            website = result.get('url', '')
+                            lead_id = self._save_organization_lead(
+                                city=city_name,
+                                business_name=business_name,
+                                website=website,
+                                emails=contacts.get('emails', []),
+                                phones=contacts.get('phones', [])
+                            )
+                            if lead_id and website:
+                                domain = self._extract_domain(website)
+                                if domain:
+                                    self._discover_employees(domain, lead_id)
+                            fallback_found_any = True
+                        time.sleep(random.uniform(1, 3))
+            
+            # Small-town logic: if both Pagine Gialle and web searches return 0, mark done and skip Groq
+            if len(pg_businesses) == 0 and not fallback_found_any:
+                self.status_updated.emit(f"No leather businesses found in {city_name}")
+                self._mark_city_done(city_id)
+                # Emit progress for empty city
+                conn_progress = sqlite3.connect(database.DB_PATH)
+                cursor_progress = conn_progress.cursor()
+                cursor_progress.execute("SELECT COUNT(*) FROM leads WHERE city = ?", (city_name,))
+                row_progress = cursor_progress.fetchone()
+                leads_count_for_city = row_progress[0] if row_progress else 0
+                cursor_progress.execute("SELECT COUNT(*) FROM leads")
+                total_row = cursor_progress.fetchone()
+                total_leads = total_row[0] if total_row else 0
+                conn_progress.close()
+                self.progress_updated.emit(city_name, leads_count_for_city, total_leads)
+                continue
             
             # Parse existing plan or generate new one (secondary source, runs after Pagine Gialle)
             queries = []
@@ -441,7 +494,15 @@ class LeadAgent(QObject):
     def fetch_url(self, url):
         self.status_updated.emit(f"Fetching: {url}")
         try:
-            response = requests.get(url, impersonate="chrome", timeout=10)
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "it-IT,it;q=0.9,en;q=0.8",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Connection": "keep-alive",
+                "Upgrade-Insecure-Requests": "1"
+            }
+            response = requests.get(url, headers=headers, impersonate="chrome", timeout=10)
             debug_print(f"FETCH: {url} → status {response.status_code}")
             print(f"[fetch_url] URL: {url}, Status: {response.status_code}")
             if response.status_code == 200:
@@ -522,10 +583,22 @@ class LeadAgent(QObject):
     def scrape_pagine_gialle(self, city_name, keyword="pelletteria"):
         """Scrape Pagine Gialle for businesses in a given city."""
         debug_print(f"PAGINE GIALLE: Searching for '{keyword}' in {city_name}")
-        url = f"https://www.paginegialle.it/ricerca/{keyword}/{city_name}"
+        # Fix URL format: replace spaces with %20
+        encoded_city = quote(city_name.replace(' ', '+'))
+        url = f"https://www.paginegialle.it/ricerca/{keyword}/{encoded_city}"
+        
+        # Add proper headers to avoid 403
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "it-IT,it;q=0.9,en;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1"
+        }
         
         try:
-            response = requests.get(url, impersonate="chrome", timeout=15)
+            response = requests.get(url, headers=headers, impersonate="chrome", timeout=15)
             debug_print(f"PAGINE GIALLE: URL {url} → status {response.status_code}")
             
             # Check for CAPTCHA or error
