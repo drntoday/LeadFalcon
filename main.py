@@ -169,7 +169,9 @@ class MainWindow(QMainWindow):
 
 
 if __name__ == "__main__":
+    import database
     app = QApplication(sys.argv)
+    database.initialize_db()
     window = MainWindow()
     window.show()
     sys.exit(app.exec())

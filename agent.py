@@ -9,6 +9,8 @@ from email_validator import validate_email
 import phonenumbers
 from PySide6.QtCore import QObject, Signal, QThread
 
+import database
+
 
 class OSMAgent(QObject):
     status_updated = Signal(str)
@@ -20,6 +22,7 @@ class OSMAgent(QObject):
         self.settings = settings or {}
         self._stopped = False
         self._paused = False
+        self.db_path = database.DB_PATH
 
     def start(self):
         self._stopped = False
@@ -144,7 +147,72 @@ class OSMAgent(QObject):
         except Exception:
             return {}
 
+    def _save_lead(self, lead: dict):
+        """Save a lead to the database if it doesn't already exist."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "INSERT OR IGNORE INTO leads (type, name, phone, email, website, city, source) VALUES (?,?,?,?,?,?,?)",
+            (lead.get("type", ""), lead.get("name", ""), lead.get("phone", ""), 
+             lead.get("email", ""), lead.get("website", ""), lead.get("city", ""), 
+             lead.get("source", ""))
+        )
+        
+        if cursor.rowcount > 0:
+            self.lead_found.emit(lead)
+        
+        conn.commit()
+        conn.close()
+
     def run(self):
-        """Main execution method - placeholder."""
-        self.status_updated.emit("Agent started")
+        """Main execution method - process all Italian cities."""
+        self.status_updated.emit("Agent started. Loading cities...")
+        
+        cities = database.get_cities()
+        
+        if not cities:
+            self.status_updated.emit("No cities to process.")
+            self.finished.emit()
+            return
+        
+        for city_id, name, region in cities:
+            if self._stopped:
+                break
+            self.wait_if_paused()
+            
+            self.status_updated.emit(f"Processing: {name} ({region})")
+            
+            results = self.query_overpass(name)
+            self.status_updated.emit(f"Found {len(results)} businesses in {name}")
+            
+            for biz in results:
+                if self._stopped:
+                    break
+                self.wait_if_paused()
+                
+                lead = {
+                    "type": "ORGANIZATION",
+                    "name": biz["name"],
+                    "phone": biz.get("phone", ""),
+                    "email": "",
+                    "website": biz.get("website", ""),
+                    "city": name,
+                    "source": "overpass"
+                }
+                
+                if biz.get("website"):
+                    contacts = self.extract_contacts_from_page(biz["website"])
+                    if contacts.get("emails"):
+                        lead["email"] = contacts["emails"][0]
+                    if contacts.get("phones") and not lead["phone"]:
+                        lead["phone"] = contacts["phones"][0]
+                
+                self._save_lead(lead)
+                
+                time.sleep(random.uniform(0.5, 1.5))
+            
+            time.sleep(3)
+        
+        self.status_updated.emit("All cities processed.")
         self.finished.emit()
