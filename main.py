@@ -17,11 +17,59 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QMessageBox,
     QAction,
-    QLabel
+    QLabel,
+    QDialog,
+    QLineEdit,
+    QCheckBox,
+    QDialogButtonBox,
+    QFormLayout
 )
 from PySide6.QtCore import QThread
+from PySide6.QtGui import QIcon
 
 from agent import OSMAgent
+
+
+SETTINGS_FILE = "settings.json"
+
+
+class SettingsDialog(QDialog):
+    """Dialog for configuring application settings."""
+    
+    def __init__(self, parent=None, current_settings=None):
+        super().__init__(parent)
+        self.setWindowTitle("Settings")
+        self.setModal(True)
+        
+        layout = QFormLayout(self)
+        
+        # Margo API Key field
+        self.margo_key_input = QLineEdit()
+        self.margo_key_input.setEchoMode(QLineEdit.Password)
+        self.margo_key_input.setPlaceholderText("Optional – free key from margo.io")
+        layout.addRow("Margo API Key:", self.margo_key_input)
+        
+        # Use Margo checkbox
+        self.use_margo_checkbox = QCheckBox("Use Margo to enrich leads (20/day free)")
+        layout.addRow(self.use_margo_checkbox)
+        
+        # Dialog buttons
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addRow(button_box)
+        
+        # Load current settings
+        if current_settings:
+            self.margo_key_input.setText(current_settings.get('margo_key', ''))
+            self.use_margo_checkbox.setChecked(current_settings.get('use_margo', False))
+    
+    def get_settings(self):
+        """Return the settings as a dict."""
+        return {
+            'margo_key': self.margo_key_input.text(),
+            'use_margo': self.use_margo_checkbox.isChecked()
+        }
 
 
 class MainWindow(QMainWindow):
@@ -30,6 +78,9 @@ class MainWindow(QMainWindow):
         
         self.setWindowTitle("LeadFalcon – Leather Leads")
         self.resize(1000, 600)
+        
+        # Load settings from file
+        self.app_settings = self._load_settings()
         
         # Create toolbar
         toolbar = QToolBar("Main Toolbar")
@@ -51,6 +102,16 @@ class MainWindow(QMainWindow):
         self.export_action = QAction("Export", self)
         self.export_action.triggered.connect(self.on_export)
         toolbar.addAction(self.export_action)
+        
+        # Settings action with gear icon
+        self.settings_action = QAction("Settings", self)
+        try:
+            # Try to use a standard gear icon if available
+            self.settings_action.setIcon(QIcon.fromTheme("preferences-system"))
+        except Exception:
+            pass
+        self.settings_action.triggered.connect(self.on_settings)
+        toolbar.addAction(self.settings_action)
         
         # Central widget with table
         central_widget = QWidget()
@@ -85,6 +146,35 @@ class MainWindow(QMainWindow):
         
         # Lead counter
         self.lead_count = 0
+    
+    def _load_settings(self):
+        """Load settings from settings.json file."""
+        if os.path.exists(SETTINGS_FILE):
+            try:
+                with open(SETTINGS_FILE, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"Error loading settings: {e}")
+        return {}
+    
+    def _save_settings(self, settings):
+        """Save settings to settings.json file."""
+        try:
+            with open(SETTINGS_FILE, 'w') as f:
+                json.dump(settings, f, indent=2)
+            return True
+        except Exception as e:
+            print(f"Error saving settings: {e}")
+            return False
+    
+    def on_settings(self):
+        """Open the settings dialog."""
+        dialog = SettingsDialog(self, self.app_settings)
+        if dialog.exec():
+            new_settings = dialog.get_settings()
+            self.app_settings = new_settings
+            self._save_settings(new_settings)
+            self.status_bar.showMessage("Settings saved")
 
     def on_lead_found(self, lead: dict):
         """Add a new lead to the table."""
@@ -112,7 +202,7 @@ class MainWindow(QMainWindow):
             return
         
         self.thread = QThread()
-        self.agent = OSMAgent(settings={})
+        self.agent = OSMAgent(settings=self.app_settings)
         
         self.agent.moveToThread(self.thread)
         
